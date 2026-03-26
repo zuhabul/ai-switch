@@ -26,6 +26,7 @@ ai list
 ai save work
 ai use work
 ai usage
+ai delete work
 ai --platform codex save work
 ai --platform opencode use work
 ```
@@ -35,6 +36,7 @@ ai --platform opencode use work
 - Without `--platform`, `save` and `use` apply to all available platforms.
 - Missing platforms are skipped with a warning unless explicitly requested.
 - `use` overwrites active auth files without creating backups.
+- `delete` removes a saved account from the shared store.
 - `usage` shows Codex limits and requires `codex` CLI plus `tmux`.
 
 ## Storage

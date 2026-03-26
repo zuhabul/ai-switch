@@ -37,6 +37,7 @@ Usage:
   ai save <account>
   ai use <account>
   ai usage
+  ai delete <account>
   ai --platform codex list|save|use <account>
   ai --platform opencode list|save|use <account>
 
@@ -46,6 +47,7 @@ Description:
   save <account>    Save auth from the selected platform(s)
   use <account>     Switch the selected platform(s) to a saved account
   usage             Show Codex usage limits (same output as c-stat)
+  delete <account>  Remove a saved account from the shared store
 
 Notes:
   - Without --platform, save/use apply to all available platforms.
@@ -61,6 +63,7 @@ Examples:
   ai save work
   ai use personal
   ai usage
+  ai delete personal
   ai --platform codex save work
   ai --platform opencode use personal
 EOF
@@ -675,6 +678,35 @@ prepare_account_entry() {
   echo "${normalized}"
 }
 
+delete_account() {
+  local account="$1"
+  local primary="${STORE_DIR}/${account}.json"
+  local legacy_store="${LEGACY_STORE_DIR}/${account}.json"
+  local legacy_opencode="${LEGACY_OPENCODE_DIR}/${account}.json"
+  local deleted=0
+
+  if [[ -f "${primary}" ]]; then
+    rm -f "${primary}"
+    deleted=1
+  fi
+
+  if [[ -f "${legacy_store}" ]]; then
+    rm -f "${legacy_store}"
+    deleted=1
+  fi
+
+  if [[ -f "${legacy_opencode}" ]]; then
+    rm -f "${legacy_opencode}"
+    deleted=1
+  fi
+
+  if [[ "${deleted}" -eq 0 ]]; then
+    fail "Account not found: ${account}"
+  fi
+
+  echo "Removed saved account '${account}' from the store."
+}
+
 save_account_platform() {
   local platform="$1"
   local account="$2"
@@ -926,7 +958,7 @@ parse_args() {
         platform="${1#*=}"
         shift
         ;;
-      list|save|use|usage)
+      list|save|use|usage|delete)
         command="$1"
         shift
         break
@@ -939,12 +971,12 @@ parse_args() {
         fail "Unknown option '${1}'."
         ;;
       *)
-        fail "Expected command list/save/use after options."
+        fail "Expected command list/save/use/usage/delete after options."
         ;;
     esac
   done
 
-  [[ -n "${command}" ]] || fail "Missing command. Use list, save, use, or usage."
+  [[ -n "${command}" ]] || fail "Missing command. Use list, save, use, usage, or delete."
 
   if [[ -n "${platform}" ]]; then
     validate_platform "${platform}"
@@ -984,6 +1016,11 @@ parse_args() {
         fi
         use_account_platform "${platform}" "$1"
       fi
+      ;;
+    delete)
+      [[ $# -eq 1 ]] || fail "Usage: ai delete <account>"
+      validate_account_name "$1"
+      delete_account "$1"
       ;;
     *)
       fail "Unknown command '${command}'."

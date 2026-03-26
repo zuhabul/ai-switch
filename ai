@@ -36,6 +36,7 @@ Usage:
   ai list
   ai save <account>
   ai use <account>
+  ai usage
   ai --platform codex list|save|use <account>
   ai --platform opencode list|save|use <account>
 
@@ -44,6 +45,7 @@ Description:
   list              List saved accounts in the shared store
   save <account>    Save auth from the selected platform(s)
   use <account>     Switch the selected platform(s) to a saved account
+  usage             Show Codex usage limits (same output as c-stat)
 
 Notes:
   - Without --platform, save/use apply to all available platforms.
@@ -51,13 +53,14 @@ Notes:
   - Missing platforms are skipped unless explicitly requested.
   - Default store: ~/.local/share/ai-switch/credentials (override with AI_SWITCH_HOME).
   - Codex home defaults to ~/.codex (override with CODEX_HOME).
-  - Related shell command: c-stat (Codex status summary from ~/.zshrc).
+  - The usage command requires codex CLI and tmux.
 
 Examples:
   ai ls
   ai list
   ai save work
   ai use personal
+  ai usage
   ai --platform codex save work
   ai --platform opencode use personal
 EOF
@@ -493,6 +496,48 @@ list_active_profiles() {
   echo "  OpenCode: ${opencode_active}"
 }
 
+show_usage_limits() {
+  local session="codex-status"
+  local output
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    warn "tmux is required for 'ai usage'."
+    return 1
+  fi
+
+  if ! command -v codex >/dev/null 2>&1; then
+    warn "codex CLI is required for 'ai usage'."
+    return 1
+  fi
+
+  tmux kill-session -t "$session" 2>/dev/null || true
+  if ! tmux new-session -d -s "$session"; then
+    warn "Failed to create tmux session '${session}'."
+    return 1
+  fi
+
+  tmux send-keys -t "$session" "codex" C-m
+  sleep 5
+  tmux send-keys -t "$session" "/status" C-m
+  sleep 2
+
+  output="$(
+    tmux capture-pane -t "$session" -p -S -200 \
+    | tr -d '\r' \
+    | grep -Eo '[0-9]+h [0-9]+%|weekly [0-9]+%' \
+    | paste -sd ' · ' -
+  )"
+
+  tmux kill-session -t "$session" 2>/dev/null || true
+
+  if [[ -n "$output" ]]; then
+    echo "$output"
+  else
+    warn "Could not parse Codex limits."
+    return 1
+  fi
+}
+
 migrate_legacy_store() {
   local files
   local file
@@ -892,7 +937,7 @@ parse_args() {
         platform="${1#*=}"
         shift
         ;;
-      list|save|use)
+      list|save|use|usage)
         command="$1"
         shift
         break
@@ -910,7 +955,7 @@ parse_args() {
     esac
   done
 
-  [[ -n "${command}" ]] || fail "Missing command. Use list, save or use."
+  [[ -n "${command}" ]] || fail "Missing command. Use list, save, use, or usage."
 
   if [[ -n "${platform}" ]]; then
     validate_platform "${platform}"
@@ -919,6 +964,10 @@ parse_args() {
   fi
 
   case "${command}" in
+    usage)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'usage'."
+      show_usage_limits
+      ;;
     list)
       [[ $# -eq 0 ]] || fail "Unexpected arguments for 'list'."
       list_accounts

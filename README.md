@@ -25,6 +25,7 @@ ai ls
 ai list
 ai save work
 ai use work
+ai usage
 ai --platform codex save work
 ai --platform opencode use work
 ```
@@ -34,6 +35,7 @@ ai --platform opencode use work
 - Without `--platform`, `save` and `use` apply to all available platforms.
 - Missing platforms are skipped with a warning unless explicitly requested.
 - `use` creates backups before overwriting active auth files.
+- `usage` shows Codex limits and requires `codex` CLI plus `tmux`.
 
 ## Storage
 

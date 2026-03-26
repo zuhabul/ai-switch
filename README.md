@@ -52,16 +52,6 @@ You can override paths with environment variables:
 - `CODEX_AUTH_FILE`
 - `OPENCODE_AUTH_FILE`
 
-## Migration
-
-Legacy files from:
-
-- `~/.codex/credentials/`
-- `~/.codex/credentials/opencode-openai/`
-
-are migrated automatically into the external store on first run. The originals
-are moved into a timestamped backup under `~/.local/share/ai-switch/`.
-
 ## Security
 
 This repository is meant to be shared. Do not commit auth files. The `.gitignore`

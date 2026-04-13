@@ -16,7 +16,7 @@ Build a provider-agnostic AI runtime/auth control plane that supports multi-acco
 - [x] Create `v2` module skeleton with typed internal packages.
 - [x] Add command binaries: `aiswitch` and `aiswitchd`.
 - [ ] Create RFC-0001 with non-goals and failover guarantees.
-- [ ] Create versioned adapter SDK contract.
+- [x] Create versioned adapter SDK contract.
 
 ### 2. Security and Identity
 - [ ] Add secret vault abstraction with keyring + encrypted file fallback.
@@ -28,9 +28,9 @@ Build a provider-agnostic AI runtime/auth control plane that supports multi-acco
 ### 3. Provider and CLI Adapters
 - [x] Create built-in capability registry for core providers and frontends.
 - [ ] Implement adapter execution contracts: `detect`, `validate`, `refresh`, `launch`, `checkpoint`, `resume`.
-- [ ] Implement native adapters for Codex, Claude Code, Gemini CLI, Qwen Code, Kimi CLI.
-- [ ] Implement compatibility adapters for OpenAI-compatible, Anthropic-compatible, Gemini-compatible protocols.
-- [ ] Implement provider adapters for MiniMax, Z.AI/GLM, xAI, Moonshot API endpoints.
+- [x] Implement native adapters for Codex, Claude Code, Gemini CLI, Qwen Code, Kimi CLI.
+- [x] Implement compatibility adapters for OpenAI-compatible, Anthropic-compatible, Gemini-compatible protocols.
+- [x] Implement provider adapters for MiniMax, Z.AI/GLM, xAI, Moonshot API endpoints.
 
 ### 4. Routing, Quotas, and Failover
 - [x] Implement scoring router with policy, health, cooldown filters.
@@ -51,6 +51,8 @@ Build a provider-agnostic AI runtime/auth control plane that supports multi-acco
 
 ### 6. API, Control Plane, and Integrations
 - [x] Add HTTP control API endpoints for profiles, policies, health, route, leases.
+- [x] Add management UX frontend served by `aiswitchd`.
+- [x] Add route candidate endpoint for multi-account failover planning.
 - [ ] Add authentication for control API (mTLS or signed tokens).
 - [ ] Add webhooks/events for rate-limit and failover incidents.
 - [ ] Add Hermes/OpenCode/OpenClaw integration bridges.
@@ -67,6 +69,7 @@ Build a provider-agnostic AI runtime/auth control plane that supports multi-acco
 
 ### 8. Quality and Verification
 - [x] Add unit tests for routing, policy, store, adapter registry, and lease behavior.
+- [x] Add HTTP API tests for dashboard and route candidate flows.
 - [ ] Add integration tests with mocked provider endpoints.
 - [ ] Add contract tests for adapters.
 - [ ] Add load tests for route API and lease contention.

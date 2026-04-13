@@ -8,6 +8,20 @@ WRAPPER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ai-switch-agent-wrapp
 WRAPPER_BIN="${INSTALL_DIR}/ai-switch-agent-wrapper"
 install -m 0755 "${WRAPPER_SRC}" "${WRAPPER_BIN}"
 
+resolve_cmd() {
+  for candidate in "$@"; do
+    if [[ -x "${candidate}" ]]; then
+      echo "${candidate}"
+      return 0
+    fi
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      command -v "${candidate}"
+      return 0
+    fi
+  done
+  echo "$1"
+}
+
 write_wrapper() {
   local file="$1"
   local frontend="$2"
@@ -27,11 +41,15 @@ SH
   chmod +x "${INSTALL_DIR}/${file}"
 }
 
-write_wrapper "multica-codex-aiswitch" "codex" "app_server" "/home/echo/.local/bin/codex.ai-switch-real" "codex"
-write_wrapper "multica-opencode-aiswitch" "opencode" "native_cli" "/home/echo/.local/bin/opencode.real" "opencode"
-write_wrapper "multica-claude-aiswitch" "claude_code" "native_cli" "/home/echo/.local/bin/claude.real" ""
-write_wrapper "multica-gemini-aiswitch" "gemini_cli" "native_cli" "/home/echo/.local/bin/gemini" ""
-write_wrapper "multica-hermes-aiswitch" "hermes" "hermes" "/home/echo/.local/bin/hermes" ""
-write_wrapper "multica-openclaw-aiswitch" "openclaw" "native_cli" "openclaw" ""
+write_wrapper "multica-codex-aiswitch" "codex" "app_server" "$(resolve_cmd /home/echo/.local/bin/codex.ai-switch-real codex)" "codex"
+write_wrapper "multica-opencode-aiswitch" "opencode" "native_cli" "$(resolve_cmd /home/echo/.local/bin/opencode.real opencode)" "opencode"
+write_wrapper "multica-claude-aiswitch" "claude_code" "native_cli" "$(resolve_cmd /home/echo/.local/bin/claude.real claude)" ""
+write_wrapper "multica-gemini-aiswitch" "gemini_cli" "native_cli" "$(resolve_cmd /home/echo/.local/bin/gemini gemini)" ""
+write_wrapper "multica-hermes-aiswitch" "hermes" "hermes" "$(resolve_cmd /home/echo/.local/bin/hermes hermes)" ""
+write_wrapper "multica-openclaw-aiswitch" "openclaw" "native_cli" "$(resolve_cmd /home/echo/.local/bin/openclaw openclaw)" ""
+write_wrapper "multica-copilot-aiswitch" "copilot" "native_cli" "$(resolve_cmd /home/echo/.local/bin/copilot copilot)" ""
+write_wrapper "multica-qwen-aiswitch" "qwen_code" "native_cli" "$(resolve_cmd /home/echo/.local/bin/qwen-code qwen-code)" ""
+write_wrapper "multica-kimi-aiswitch" "kimi_cli" "native_cli" "$(resolve_cmd /home/echo/.local/bin/kimi kimi)" ""
+write_wrapper "multica-aider-aiswitch" "aider" "native_cli" "$(resolve_cmd /home/echo/.local/bin/aider aider)" ""
 
 echo "Installed wrappers in ${INSTALL_DIR}"

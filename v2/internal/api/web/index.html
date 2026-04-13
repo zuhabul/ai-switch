@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Switch Control Plane</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <h1>AI Switch Control Plane</h1>
+          <p>Professional multi-account orchestration for coding CLIs and agent runtimes.</p>
+        </div>
+        <div class="hero-actions">
+          <button class="btn" id="refresh-all">Refresh</button>
+          <button class="btn secondary" id="refresh-adapters">Adapters</button>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card span-12">
+          <h2>Platform Health</h2>
+          <div class="stats" id="stats"></div>
+          <div class="hint" id="as-of"></div>
+        </article>
+
+        <article class="card span-7">
+          <h2>Profiles</h2>
+          <p class="sub">One profile per account/frontend. Supports professional multi-account failover chains.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Provider</th>
+                  <th>Frontend</th>
+                  <th>Account</th>
+                  <th>Priority</th>
+                  <th>Lease</th>
+                  <th>Health</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="profiles-body"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="card span-5">
+          <h2>Create Profile</h2>
+          <form id="profile-form" class="form-grid">
+            <div><label>ID</label><input name="id" required placeholder="codex-main" /></div>
+            <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
+            <div><label>Frontend</label><input name="frontend" required placeholder="codex" /></div>
+            <div><label>Auth Method</label><input name="auth_method" required placeholder="chatgpt" /></div>
+            <div><label>Protocol</label><input name="protocol" required placeholder="app_server" /></div>
+            <div><label>Account</label><input name="account" placeholder="team-a" /></div>
+            <div><label>Priority</label><input name="priority" type="number" value="5" /></div>
+            <div><label>Budget USD</label><input name="budget_daily_usd" type="number" step="0.01" value="0" /></div>
+            <div class="wide"><label>Tags (comma)</label><input name="tags" placeholder="prod,primary" /></div>
+            <div><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
+            <div class="full row">
+              <button class="btn" type="submit">Save Profile</button>
+            </div>
+          </form>
+          <div id="profile-flash" class="flash"></div>
+        </article>
+
+        <article class="card span-6">
+          <h2>Route Simulator</h2>
+          <form id="route-form" class="form-grid">
+            <div><label>Frontend</label><input name="frontend" placeholder="codex" /></div>
+            <div><label>Task Class</label><input name="task_class" value="coding" /></div>
+            <div><label>Protocol</label><input name="required_protocol" placeholder="app_server" /></div>
+            <div><label>Owner</label><input name="owner" value="dashboard" /></div>
+            <div class="wide"><label>Preferred Providers</label><input name="preferred_providers" placeholder="openai,google" /></div>
+            <div class="wide"><label>Required Tags</label><input name="require_tags" placeholder="prod,primary" /></div>
+            <div class="full row">
+              <button class="btn secondary" type="submit">Simulate Route</button>
+            </div>
+          </form>
+          <pre class="json" id="route-output">{}</pre>
+        </article>
+
+        <article class="card span-6">
+          <h2>Secrets and Binding</h2>
+          <form id="secret-form" class="form-grid">
+            <div><label>Secret Name</label><input name="name" required placeholder="OPENAI_MAIN_KEY" /></div>
+            <div class="wide"><label>Secret Value</label><input name="value" required placeholder="sk-..." /></div>
+            <div class="full row"><button class="btn secondary" type="submit">Store Secret</button></div>
+          </form>
+          <form id="binding-form" class="form-grid">
+            <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
+            <div><label>Env Var</label><input name="env_var" required placeholder="OPENAI_API_KEY" /></div>
+            <div class="wide"><label>Secret Key</label><input name="secret_key" required placeholder="OPENAI_MAIN_KEY" /></div>
+            <div class="full row"><button class="btn" type="submit">Bind Secret</button></div>
+          </form>
+          <div class="hint">Stored secret names:</div>
+          <pre class="json" id="secrets-output">[]</pre>
+          <div id="secret-flash" class="flash"></div>
+        </article>
+
+        <article class="card span-6">
+          <h2>Policy Rules</h2>
+          <form id="policy-form" class="form-grid">
+            <div><label>Name</label><input name="name" required placeholder="prod-safety" /></div>
+            <div><label>Priority</label><input name="priority" type="number" value="100" /></div>
+            <div class="wide"><label>Frontends</label><input name="frontends" placeholder="codex,opencode" /></div>
+            <div class="wide"><label>Task Classes</label><input name="task_classes" placeholder="coding,research" /></div>
+            <div class="wide"><label>Allow Providers</label><input name="allow_providers" placeholder="openai,anthropic" /></div>
+            <div class="wide"><label>Deny Providers</label><input name="deny_providers" placeholder="xai" /></div>
+            <div class="wide"><label>Require Any Tag</label><input name="require_any_tag" placeholder="prod" /></div>
+            <div class="wide"><label>Require Auth Methods</label><input name="require_auth_methods" placeholder="chatgpt,api_key" /></div>
+            <div><label>Max Budget</label><input name="max_budget_daily_usd" type="number" step="0.01" value="0" /></div>
+            <div class="full row"><button class="btn secondary" type="submit">Save Policy</button></div>
+          </form>
+          <pre class="json" id="policy-output">[]</pre>
+          <div id="policy-flash" class="flash"></div>
+        </article>
+
+        <article class="card span-6">
+          <h2>Adapters</h2>
+          <p class="sub">Capability registry and native runtime hooks.</p>
+          <pre class="json" id="adapters-output">[]</pre>
+        </article>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

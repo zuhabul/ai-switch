@@ -62,6 +62,12 @@ type RouteDecision struct {
 	Rejected  []string `json:"rejected,omitempty"`
 }
 
+type RoutePlan struct {
+	Primary    RouteDecision   `json:"primary"`
+	Candidates []RouteDecision `json:"candidates,omitempty"`
+	Rejected   []string        `json:"rejected,omitempty"`
+}
+
 type RuntimePlanRequest struct {
 	Frontend           string   `json:"frontend"`
 	TaskClass          string   `json:"task_class"`
@@ -83,6 +89,33 @@ type RuntimePlan struct {
 	Args      []string          `json:"args"`
 	Env       map[string]string `json:"env,omitempty"`
 	Reasons   []string          `json:"reasons,omitempty"`
+}
+
+type DashboardProfile struct {
+	Profile      Profile         `json:"profile"`
+	Health       *HealthSnapshot `json:"health,omitempty"`
+	Lease        *Lease          `json:"lease,omitempty"`
+	SecretCount  int             `json:"secret_count"`
+	LastHealthAt *time.Time      `json:"last_health_at,omitempty"`
+}
+
+type DashboardAccount struct {
+	Provider        string   `json:"provider"`
+	Account         string   `json:"account"`
+	ProfileIDs      []string `json:"profile_ids"`
+	Frontends       []string `json:"frontends"`
+	ActiveLeases    int      `json:"active_leases"`
+	HealthyProfiles int      `json:"healthy_profiles"`
+}
+
+type DashboardSummary struct {
+	TimeUTC      time.Time          `json:"time_utc"`
+	Counts       map[string]int     `json:"counts"`
+	Providers    map[string]int     `json:"providers"`
+	Profiles     []DashboardProfile `json:"profiles"`
+	Accounts     []DashboardAccount `json:"accounts"`
+	Policies     []PolicyRule       `json:"policies"`
+	ActiveLeases []Lease            `json:"active_leases"`
 }
 
 type State struct {

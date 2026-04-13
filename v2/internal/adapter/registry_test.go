@@ -6,8 +6,11 @@ func TestRegistryHasCoreProviders(t *testing.T) {
 	r := NewRegistry()
 	cases := [][2]string{
 		{"openai", "codex"},
+		{"openai", "opencode"},
+		{"openai", "openclaw"},
 		{"anthropic", "claude_code"},
 		{"google", "gemini_cli"},
+		{"github", "copilot"},
 		{"alibaba", "qwen_code"},
 		{"moonshot", "kimi_cli"},
 		{"minimax", "hermes"},

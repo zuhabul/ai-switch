@@ -1,6 +1,9 @@
 package adapter
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 type LaunchRequest struct {
 	Frontend string
@@ -36,6 +39,15 @@ func NewHookRegistry() *HookRegistry {
 func (r *HookRegistry) Get(frontend string) (RuntimeHook, bool) {
 	h, ok := r.hooks[frontend]
 	return h, ok
+}
+
+func (r *HookRegistry) ListFrontends() []string {
+	out := make([]string, 0, len(r.hooks))
+	for k := range r.hooks {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func BuildDefault(frontend string, req LaunchRequest) (LaunchSpec, error) {

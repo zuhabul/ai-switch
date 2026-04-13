@@ -188,16 +188,26 @@ func handleRoute(ctx context.Context, svc *service.Service, args []string) {
 	providers := fs.String("providers", "", "comma-separated preferred providers")
 	tags := fs.String("tags", "", "comma-separated required tags")
 	owner := fs.String("owner", "", "owner")
+	withCandidates := fs.Bool("candidates", false, "return full ranked candidate chain")
 	_ = fs.Parse(args)
 
-	d, err := svc.Route(ctx, model.TaskRequest{
+	req := model.TaskRequest{
 		Frontend:           *frontend,
 		TaskClass:          *task,
 		RequiredProtocol:   *protocol,
 		PreferredProviders: splitCSV(*providers),
 		RequireTags:        splitCSV(*tags),
 		Owner:              *owner,
-	})
+	}
+	if *withCandidates {
+		plan, err := svc.RoutePlan(ctx, req)
+		if err != nil {
+			exitErr(fmt.Errorf("%w; route_plan=%s", err, asJSON(plan)))
+		}
+		printJSON(plan)
+		return
+	}
+	d, err := svc.Route(ctx, req)
 	if err != nil {
 		exitErr(fmt.Errorf("%w; decision=%s", err, asJSON(d)))
 	}
@@ -331,7 +341,7 @@ func handleRuntime(ctx context.Context, svc *service.Service, v *vault.FileVault
 		prompt := fs.String("prompt", "", "prompt")
 		leaseTTL := fs.Duration("lease-ttl", 15*time.Minute, "lease ttl")
 		_ = fs.Parse(args[1:])
-		decision, err := svc.Route(ctx, model.TaskRequest{
+		routePlan, err := svc.RoutePlan(ctx, model.TaskRequest{
 			Frontend:           *frontend,
 			TaskClass:          *task,
 			RequiredProtocol:   *protocol,
@@ -340,8 +350,9 @@ func handleRuntime(ctx context.Context, svc *service.Service, v *vault.FileVault
 			Owner:              *owner,
 		})
 		if err != nil {
-			exitErr(fmt.Errorf("%w; decision=%s", err, asJSON(decision)))
+			exitErr(fmt.Errorf("%w; route_plan=%s", err, asJSON(routePlan)))
 		}
+		decision := routePlan.Primary
 		profile, err := svc.GetProfile(ctx, decision.ProfileID)
 		if err != nil {
 			exitErr(err)
@@ -363,6 +374,16 @@ func handleRuntime(ctx context.Context, svc *service.Service, v *vault.FileVault
 		env := map[string]string{
 			"AI_SWITCH_PROFILE_ID": decision.ProfileID,
 			"AI_SWITCH_LEASE_ID":   lease.ID,
+		}
+		fallbackIDs := make([]string, 0, len(routePlan.Candidates))
+		for _, c := range routePlan.Candidates {
+			if c.ProfileID == "" || c.ProfileID == decision.ProfileID {
+				continue
+			}
+			fallbackIDs = append(fallbackIDs, c.ProfileID)
+		}
+		if len(fallbackIDs) > 0 {
+			env["AI_SWITCH_FAILOVER_PROFILE_IDS"] = strings.Join(fallbackIDs, ",")
 		}
 		for envVar, secretKey := range bindings {
 			val, err := v.Get(secretKey)
@@ -468,7 +489,7 @@ Usage:
   aiswitch policy add --name NAME [--frontends codex] [--allow-providers openai,google]
   aiswitch policy list
   aiswitch health set --id ID --r5m 30 --rh 600 --latency 220 --error 0.1
-  aiswitch route --frontend codex --task coding --protocol app_server
+  aiswitch route --frontend codex --task coding --protocol app_server [--candidates]
   aiswitch lease acquire --profile ID --frontend codex --owner multica --ttl 15m
   aiswitch lease release --id LEASE_ID
   aiswitch lease list

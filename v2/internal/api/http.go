@@ -1,9 +1,12 @@
 package api
 
 import (
+	"embed"
 	"encoding/json"
+	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/zuhabul/ai-switch/v2/internal/adapter"
@@ -12,13 +15,23 @@ import (
 	"github.com/zuhabul/ai-switch/v2/internal/vault"
 )
 
+//go:embed web/index.html web/app.js web/styles.css
+var webFiles embed.FS
+
 type Server struct {
-	svc   *service.Service
-	vault *vault.FileVault
+	svc      *service.Service
+	vault    *vault.FileVault
+	adapters *adapter.Registry
+	hooks    *adapter.HookRegistry
 }
 
 func NewServer(svc *service.Service, v *vault.FileVault) *Server {
-	return &Server{svc: svc, vault: v}
+	return &Server{
+		svc:      svc,
+		vault:    v,
+		adapters: adapter.NewRegistry(),
+		hooks:    adapter.NewHookRegistry(),
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -28,10 +41,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v2/policies", s.policies)
 	mux.HandleFunc("/v2/leases", s.leases)
 	mux.HandleFunc("/v2/route", s.route)
+	mux.HandleFunc("/v2/route/candidates", s.routeCandidates)
 	mux.HandleFunc("/v2/health", s.healthUpdate)
 	mux.HandleFunc("/v2/secret-bindings", s.secretBindings)
 	mux.HandleFunc("/v2/secrets", s.secrets)
 	mux.HandleFunc("/v2/runtime/plan", s.runtimePlan)
+	mux.HandleFunc("/v2/dashboard/summary", s.dashboardSummary)
+	mux.HandleFunc("/v2/adapters", s.adaptersInfo)
+	mux.HandleFunc("/", s.frontend)
 	return loggingMiddleware(mux)
 }
 
@@ -43,6 +60,16 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) profiles(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id != "" {
+			p, err := s.svc.GetProfile(r.Context(), id)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
 		ps, err := s.svc.ListProfiles(r.Context())
 		if err != nil {
 			writeErr(w, err)
@@ -60,6 +87,28 @@ func (s *Server) profiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	case http.MethodPut:
+		var p model.Profile
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.svc.UpdateProfile(r.Context(), p); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case http.MethodDelete:
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id is required"})
+			return
+		}
+		if err := s.svc.DeleteProfile(r.Context(), id); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -68,6 +117,16 @@ func (s *Server) profiles(w http.ResponseWriter, r *http.Request) {
 func (s *Server) policies(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if name != "" {
+			policy, err := s.svc.GetPolicy(r.Context(), name)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, policy)
+			return
+		}
 		policies, err := s.svc.ListPolicies(r.Context())
 		if err != nil {
 			writeErr(w, err)
@@ -85,6 +144,28 @@ func (s *Server) policies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	case http.MethodPut:
+		var p model.PolicyRule
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.svc.UpdatePolicy(r.Context(), p); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case http.MethodDelete:
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name is required"})
+			return
+		}
+		if err := s.svc.DeletePolicy(r.Context(), name); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -150,21 +231,47 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, decision)
 }
 
-func (s *Server) healthUpdate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) routeCandidates(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var hs model.HealthSnapshot
-	if err := json.NewDecoder(r.Body).Decode(&hs); err != nil {
+	var req model.TaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := s.svc.UpdateHealth(r.Context(), hs); err != nil {
-		writeErr(w, err)
+	plan, err := s.svc.RoutePlan(r.Context(), req)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "route_plan": plan})
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, plan)
+}
+
+func (s *Server) healthUpdate(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		health, err := s.svc.ListHealth(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, health)
+	case http.MethodPost:
+		var hs model.HealthSnapshot
+		if err := json.NewDecoder(r.Body).Decode(&hs); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.svc.UpdateHealth(r.Context(), hs); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) secretBindings(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +288,7 @@ func (s *Server) secretBindings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, bindings)
-	case http.MethodPost:
+	case http.MethodPost, http.MethodPut:
 		var req struct {
 			ProfileID string `json:"profile_id"`
 			EnvVar    string `json:"env_var"`
@@ -222,7 +329,7 @@ func (s *Server) secrets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": names})
-	case http.MethodPost:
+	case http.MethodPost, http.MethodPut:
 		var req struct {
 			Name  string `json:"name"`
 			Value string `json:"value"`
@@ -272,7 +379,7 @@ func (s *Server) runtimePlan(w http.ResponseWriter, r *http.Request) {
 	if req.Owner == "" {
 		req.Owner = "runtime-plan-api"
 	}
-	decision, err := s.svc.Route(r.Context(), model.TaskRequest{
+	routePlan, err := s.svc.RoutePlan(r.Context(), model.TaskRequest{
 		Frontend:           req.Frontend,
 		TaskClass:          req.TaskClass,
 		RequiredProtocol:   req.RequiredProtocol,
@@ -281,9 +388,10 @@ func (s *Server) runtimePlan(w http.ResponseWriter, r *http.Request) {
 		Owner:              req.Owner,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "decision": decision})
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "route_plan": routePlan})
 		return
 	}
+	decision := routePlan.Primary
 
 	ttl := 15 * time.Minute
 	if req.LeaseTTLSeconds > 0 {
@@ -315,6 +423,16 @@ func (s *Server) runtimePlan(w http.ResponseWriter, r *http.Request) {
 	env := map[string]string{
 		"AI_SWITCH_PROFILE_ID": decision.ProfileID,
 		"AI_SWITCH_LEASE_ID":   lease.ID,
+	}
+	fallbackIDs := make([]string, 0, len(routePlan.Candidates))
+	for _, c := range routePlan.Candidates {
+		if c.ProfileID == "" || c.ProfileID == decision.ProfileID {
+			continue
+		}
+		fallbackIDs = append(fallbackIDs, c.ProfileID)
+	}
+	if len(fallbackIDs) > 0 {
+		env["AI_SWITCH_FAILOVER_PROFILE_IDS"] = strings.Join(fallbackIDs, ",")
 	}
 	for envVar, secretKey := range bindings {
 		value, err := s.vault.Get(secretKey)
@@ -349,6 +467,56 @@ func (s *Server) runtimePlan(w http.ResponseWriter, r *http.Request) {
 		Env:       env,
 		Reasons:   decision.Reasons,
 	})
+}
+
+func (s *Server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	summary, err := s.svc.DashboardSummary(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) adaptersInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"capabilities":      s.adapters.List(),
+		"runtime_frontends": s.hooks.ListFrontends(),
+	})
+}
+
+func (s *Server) frontend(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/":
+		serveEmbeddedFile(w, "web/index.html", "text/html; charset=utf-8")
+	case "/app.js":
+		serveEmbeddedFile(w, "web/app.js", "application/javascript; charset=utf-8")
+	case "/styles.css":
+		serveEmbeddedFile(w, "web/styles.css", "text/css; charset=utf-8")
+	case "/favicon.ico":
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func serveEmbeddedFile(w http.ResponseWriter, name, contentType string) {
+	b, err := fs.ReadFile(webFiles, name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b)
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

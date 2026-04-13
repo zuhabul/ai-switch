@@ -7,6 +7,7 @@
 - systemd unit: `/etc/systemd/system/aiswitchd.service`
 - Traefik route: `/etc/traefik/dynamic/27-workspace-aiswitchd.yml`
 - Public endpoint prefix: `https://workspace.zuhabul.com/aiswitch`
+- Web console: `https://workspace.zuhabul.com/aiswitch/`
 
 ## Health Checks
 
@@ -19,9 +20,13 @@ curl -k -fsS https://workspace.zuhabul.com/aiswitch/healthz
 
 ```bash
 curl -k -fsS https://workspace.zuhabul.com/aiswitch/v2/profiles
+curl -k -fsS https://workspace.zuhabul.com/aiswitch/v2/dashboard/summary
 curl -k -fsS -X POST https://workspace.zuhabul.com/aiswitch/v2/route \
   -H 'content-type: application/json' \
   -d '{"frontend":"codex","task_class":"coding","required_protocol":"app_server"}'
+curl -k -fsS -X POST https://workspace.zuhabul.com/aiswitch/v2/route/candidates \
+  -H 'content-type: application/json' \
+  -d '{"frontend":"codex","task_class":"coding"}'
 ```
 
 ## Wrapper Integration
@@ -34,6 +39,10 @@ Wrappers installed under `~/.local/bin`:
 - `multica-hermes-aiswitch`
 - `multica-gemini-aiswitch`
 - `multica-openclaw-aiswitch` (requires `openclaw` binary present)
+- `multica-copilot-aiswitch`
+- `multica-qwen-aiswitch`
+- `multica-kimi-aiswitch`
+- `multica-aider-aiswitch`
 
 Generic wrapper:
 

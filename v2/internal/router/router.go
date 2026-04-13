@@ -30,6 +30,10 @@ func PickBest(in Input) model.RouteDecision {
 			best.Rejected = append(best.Rejected, fmt.Sprintf("%s: disabled", p.ID))
 			continue
 		}
+		if in.Request.Frontend != "" && p.Frontend != in.Request.Frontend {
+			best.Rejected = append(best.Rejected, fmt.Sprintf("%s: frontend mismatch", p.ID))
+			continue
+		}
 		if !p.CooldownUntil.IsZero() && now.Before(p.CooldownUntil) {
 			best.Rejected = append(best.Rejected, fmt.Sprintf("%s: cooldown until %s", p.ID, p.CooldownUntil.Format(time.RFC3339)))
 			continue

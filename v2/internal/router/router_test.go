@@ -21,8 +21,8 @@ func TestPickBest(t *testing.T) {
 		},
 		Request: model.TaskRequest{Frontend: "codex"},
 	})
-	if decision.ProfileID != "b" {
-		t.Fatalf("expected b, got %s, reasons=%v rejected=%v", decision.ProfileID, decision.Reasons, decision.Rejected)
+	if decision.ProfileID != "a" {
+		t.Fatalf("expected a (frontend-scoped), got %s, reasons=%v rejected=%v", decision.ProfileID, decision.Reasons, decision.Rejected)
 	}
 }
 

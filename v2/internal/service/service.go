@@ -268,8 +268,19 @@ func (s *Service) AcquireLease(ctx context.Context, profileID, frontend, owner s
 		return model.Lease{}, fmt.Errorf("unknown profile %s", profileID)
 	}
 	now := time.Now().UTC()
-	for _, l := range state.Leases {
+	for id, l := range state.Leases {
 		if l.ProfileID == profileID && l.ExpiresAt.After(now) {
+			if l.Owner == owner {
+				// Idempotent refresh for the same owner avoids false conflicts
+				// when previous runs crash before explicit lease release.
+				l.Frontend = frontend
+				l.ExpiresAt = now.Add(ttl)
+				state.Leases[id] = l
+				if err := s.store.Save(state); err != nil {
+					return model.Lease{}, err
+				}
+				return l, nil
+			}
 			return model.Lease{}, fmt.Errorf("profile %s already leased by %s until %s", profileID, l.Owner, l.ExpiresAt.Format(time.RFC3339))
 		}
 	}

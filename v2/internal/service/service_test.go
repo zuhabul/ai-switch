@@ -46,8 +46,31 @@ func TestRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("route failed: %v", err)
 	}
-	if d.ProfileID != "b" {
-		t.Fatalf("expected b, got %s", d.ProfileID)
+	if d.ProfileID != "a" {
+		t.Fatalf("expected a (frontend-scoped), got %s", d.ProfileID)
+	}
+}
+
+func TestLeaseReacquireSameOwnerRefreshes(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	if err := svc.AddProfile(ctx, model.Profile{ID: "p1", Provider: "google", Frontend: "gemini_cli", AuthMethod: "google_login", Protocol: "native_cli", Enabled: true}); err != nil {
+		t.Fatalf("add profile: %v", err)
+	}
+
+	first, err := svc.AcquireLease(ctx, "p1", "gemini_cli", "wrapper-echo", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("acquire first lease failed: %v", err)
+	}
+	second, err := svc.AcquireLease(ctx, "p1", "gemini_cli", "wrapper-echo", 10*time.Minute)
+	if err != nil {
+		t.Fatalf("acquire same-owner lease failed: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected same lease id to be refreshed, got %s then %s", first.ID, second.ID)
+	}
+	if !second.ExpiresAt.After(first.ExpiresAt) {
+		t.Fatalf("expected refreshed lease expiry to extend: first=%s second=%s", first.ExpiresAt, second.ExpiresAt)
 	}
 }
 

@@ -8,16 +8,43 @@ CODEX_AUTH_FILE="${CODEX_AUTH_FILE:-${CODEX_HOME}/auth.json}"
 OPENCODE_AUTH_FILE="${OPENCODE_AUTH_FILE:-$HOME/.local/share/opencode/auth.json}"
 
 STORE_DIR="${AI_SWITCH_HOME}/credentials"
+STATE_DIR="${AI_SWITCH_HOME}/state"
+RUNTIME_DIR="${AI_SWITCH_HOME}/runtime"
 LEGACY_STORE_DIR="${CODEX_HOME}/credentials"
 LEGACY_OPENCODE_DIR="${CODEX_HOME}/credentials/opencode-openai"
+CODEX_POOL_FILE="${STATE_DIR}/codex-pool.json"
+CODEX_LIMITS_FILE="${STATE_DIR}/codex-limits.json"
+CODEX_SESSION_STATE_FILE="${STATE_DIR}/codex-session.json"
+CODEX_LOG_DIR="${RUNTIME_DIR}/codex"
+AI_SWITCH_CODEX_BIN="${AI_SWITCH_CODEX_BIN:-codex}"
+AI_SWITCH_SCRIPT_BIN="${AI_SWITCH_SCRIPT_BIN:-script}"
+DEFAULT_CODEX_WRAPPER_TARGET="${HOME}/.local/bin/codex"
+DEFAULT_CODEX_WRAPPER_BACKUP="${HOME}/.local/bin/codex.ai-switch-real"
+DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS=$((6 * 60 * 60))
+DEFAULT_HTTP_429_COOLDOWN_SECONDS=$((15 * 60))
+STATUS_STALE_SECONDS=$((15 * 60))
+STATUS_PROBE_START_WAIT_SECONDS=4
+STATUS_PROBE_COMMAND_WAIT_SECONDS=2
+STATUS_PROBE_EXIT_WAIT_SECONDS=8
+
+# --- SYSTEM STATE MONITORING ---
+# Capture original shell environment to detect drift in the dashboard
+AI_SHELL_VAL="${AI_ACCOUNT:-none}"
+# Note: We NO LONGER source sync.sh here. The script must rely on auth.json as the source of truth.
+# --- SYSTEM STATE MONITORING END ---
 
 UNIFIED_FORMAT="unified-openai-auth"
 
 TMP_FILES=()
+TMP_DIRS=()
 cleanup() {
   local file
   for file in "${TMP_FILES[@]}"; do
     [[ -n "${file}" && -f "${file}" ]] && rm -f "${file}"
+  done
+  local dir
+  for dir in "${TMP_DIRS[@]}"; do
+    [[ -n "${dir}" && -d "${dir}" ]] && rm -rf "${dir}"
   done
 }
 trap cleanup EXIT
@@ -29,6 +56,13 @@ new_tmp() {
   echo "${file}"
 }
 
+new_tmp_dir() {
+  local dir
+  dir="$(mktemp -d)"
+  TMP_DIRS+=("${dir}")
+  echo "${dir}"
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -37,7 +71,28 @@ Usage:
   ai save <account>
   ai use <account>
   ai usage
+  ai status
+  ai rotate
   ai delete <account>
+  ai rename <old-account> <new-account>
+  ai pool-list
+  ai pool-set <account> [account...]
+  ai pool-add <account> [account...]
+  ai pool-remove <account> [account...]
+  ai pool-cooldown <account> [seconds]
+  ai pool-reset-cooldowns [account...]
+  ai pool-status
+  ai total
+  ai watch [--interval N] [--daemon]
+  ai sync
+  ai setup-sync
+  ai install-sync
+  ai codex [codex-args...]
+  ai doctor
+  ai test-rotation
+  ai codex-wrapper-status
+  ai codex-install-wrapper
+  ai codex-uninstall-wrapper
   ai --platform codex list|save|use <account>
   ai --platform opencode list|save|use <account>
 
@@ -47,7 +102,37 @@ Description:
   save <account>    Save auth from the selected platform(s)
   use <account>     Switch the selected platform(s) to a saved account
   usage             Show Codex usage limits (same output as c-stat)
+  status            Show advanced Codex account health, limits, and cooldowns
+                    Optional flags: --refresh, --refresh-all, --unsafe
+  rotate            Switch Codex to the most available ready account in the pool
+                    Optional flags: --refresh, --unsafe, --no-refresh
   delete <account>  Remove a saved account from the shared store
+  rename <old> <new>
+                    Rename a saved account and update pool references
+  pool-list         Show the Codex auto-rotation pool
+  pool-set          Replace the Codex auto-rotation pool with saved accounts
+  pool-add          Add one or more saved accounts to the Codex auto-rotation pool
+  pool-remove       Remove one or more accounts from the Codex auto-rotation pool
+  pool-cooldown     Mark a pool account rate-limited for N seconds (default 21600)
+  pool-reset-cooldowns
+                    Clear cooldowns for one or more pool accounts, or all if omitted
+  pool-status       Show pool order, active account, and cooldowns
+  total             Show a beautiful summary of overall pool capacity and health
+  watch             Monitor limits and rotate accounts automatically in the background
+                    --interval N: Seconds between checks (default 300)
+                    --daemon: Run in background and detach
+  sync              Output shell export commands for current account (eval this)
+  setup-sync        Print instructions to sync ai-switch with your shell
+  install-sync      Automatically install the sync hook into your ~/.bashrc / ~/.zshrc
+  codex             Launch Codex with automatic account rotation on rate limits
+  doctor            Validate wrapper, auth mode, saved accounts, and pool readiness
+  test-rotation     Run deterministic local rotation/resume self-test
+  codex-wrapper-status
+                    Show whether ~/.local/bin/codex is wrapped by ai-switch
+  codex-install-wrapper
+                    Replace ~/.local/bin/codex with an ai-switch wrapper and keep a backup
+  codex-uninstall-wrapper
+                    Restore the previous ~/.local/bin/codex from backup
 
 Notes:
   - Without --platform, save/use apply to all available platforms.
@@ -55,7 +140,9 @@ Notes:
   - Missing platforms are skipped unless explicitly requested.
   - Default store: ~/.local/share/ai-switch/credentials (override with AI_SWITCH_HOME).
   - Codex home defaults to ~/.codex (override with CODEX_HOME).
-  - The usage command requires codex CLI and tmux.
+  - Status snapshots are read from Codex session events; optional live refresh uses tmux.
+  - Managed 'ai codex' requires file-based Codex auth (~/.codex/auth.json).
+  - Managed 'ai codex' supports interactive Codex sessions and resume, not exec/review/login flows.
 
 Examples:
   ai ls
@@ -63,7 +150,20 @@ Examples:
   ai save work
   ai use personal
   ai usage
+  ai status
+  ai rotate
+  ai status --refresh
+  ai status --refresh --unsafe
   ai delete personal
+  ai rename personal saabrinamim
+  ai pool-set work personal backup
+  ai pool-cooldown personal 86400
+  ai pool-status
+  ai codex --search
+  ai codex resume --last
+  ai doctor
+  ai test-rotation
+  ai codex-install-wrapper
   ai --platform codex save work
   ai --platform opencode use personal
 EOF
@@ -88,6 +188,9 @@ now_utc() {
 
 ensure_dirs() {
   mkdir -p "${STORE_DIR}"
+  mkdir -p "${STATE_DIR}"
+  mkdir -p "${RUNTIME_DIR}"
+  mkdir -p "${CODEX_LOG_DIR}"
 }
 
 validate_account_name() {
@@ -117,6 +220,761 @@ platform_available() {
     opencode) [[ -f "${OPENCODE_AUTH_FILE}" ]] ;;
     *) return 1 ;;
   esac
+}
+
+ensure_codex_pool_file() {
+  if [[ ! -f "${CODEX_POOL_FILE}" ]]; then
+    jq -n '{accounts: [], cooldowns: {}, last_account: null, updated_at: null}' > "${CODEX_POOL_FILE}"
+    chmod 600 "${CODEX_POOL_FILE}" || true
+  fi
+}
+
+ensure_codex_limits_file() {
+  if [[ ! -f "${CODEX_LIMITS_FILE}" ]]; then
+    jq -n '{accounts: {}, updated_at: null}' > "${CODEX_LIMITS_FILE}"
+    chmod 600 "${CODEX_LIMITS_FILE}" || true
+  fi
+}
+
+ensure_codex_session_state_file() {
+  if [[ ! -f "${CODEX_SESSION_STATE_FILE}" ]]; then
+    jq -n '{
+      session_id: null,
+      session_file: null,
+      cwd: null,
+      account: null,
+      pending_resume: false,
+      last_exit_reason: null,
+      updated_at: null
+    }' > "${CODEX_SESSION_STATE_FILE}"
+    chmod 600 "${CODEX_SESSION_STATE_FILE}" || true
+  fi
+}
+
+list_session_files_newest() {
+  find "${CODEX_HOME}/sessions" -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -nr \
+    | cut -d' ' -f2-
+}
+
+normalize_path() {
+  local value="$1"
+  if [[ -z "${value}" ]]; then
+    return 1
+  fi
+  readlink -f -- "${value}" 2>/dev/null || printf '%s\n' "${value}"
+}
+
+session_file_cwd() {
+  local file="$1"
+  [[ -f "${file}" ]] || return 1
+  jq -r 'select(.type == "session_meta") | .payload.cwd // empty' "${file}" | head -n 1
+}
+
+session_file_matches_cwd() {
+  local file="$1"
+  local cwd_filter="$2"
+  local session_cwd=""
+  local normalized_file_cwd=""
+  local normalized_filter=""
+
+  [[ -n "${cwd_filter}" && -f "${file}" ]] || return 1
+  session_cwd="$(session_file_cwd "${file}" || true)"
+  [[ -n "${session_cwd}" ]] || return 1
+
+  if [[ "${session_cwd}" == "${cwd_filter}" ]]; then
+    return 0
+  fi
+
+  normalized_file_cwd="$(normalize_path "${session_cwd}" || true)"
+  normalized_filter="$(normalize_path "${cwd_filter}" || true)"
+  [[ -n "${normalized_file_cwd}" && -n "${normalized_filter}" && "${normalized_file_cwd}" == "${normalized_filter}" ]]
+}
+
+has_tty_color() {
+  [[ -t 1 ]] || return 1
+  [[ "${TERM:-}" != "dumb" ]] || return 1
+  return 0
+}
+
+colorize() {
+  local code="$1"
+  local text="$2"
+  if has_tty_color; then
+    printf '\033[%sm%s\033[0m' "${code}" "${text}"
+  else
+    printf '%s' "${text}"
+  fi
+}
+
+format_epoch_utc() {
+  local epoch="$1"
+  if [[ -z "${epoch}" || ! "${epoch}" =~ ^[0-9]+$ || "${epoch}" -le 0 ]]; then
+    echo "unknown"
+    return 0
+  fi
+  date -u -d "@${epoch}" '+%Y-%m-%d %H:%M UTC'
+}
+
+iso_to_epoch() {
+  local iso="$1"
+  if [[ -z "${iso}" || "${iso}" == "null" ]]; then
+    echo ""
+    return 0
+  fi
+  date -d "${iso}" +%s 2>/dev/null || true
+}
+
+format_duration() {
+  local total_seconds="$1"
+  local days
+  local hours
+  local minutes
+  local seconds
+  local parts=()
+
+  if [[ -z "${total_seconds}" || ! "${total_seconds}" =~ ^-?[0-9]+$ ]]; then
+    echo "unknown"
+    return 0
+  fi
+
+  if (( total_seconds <= 0 )); then
+    echo "now"
+    return 0
+  fi
+
+  days=$((total_seconds / 86400))
+  hours=$(((total_seconds % 86400) / 3600))
+  minutes=$(((total_seconds % 3600) / 60))
+  seconds=$((total_seconds % 60))
+
+  if (( days > 0 )); then
+    parts+=("${days}d")
+  fi
+  if (( hours > 0 )); then
+    parts+=("${hours}h")
+  fi
+  if (( minutes > 0 )); then
+    parts+=("${minutes}m")
+  fi
+  if (( ${#parts[@]} == 0 )); then
+    parts+=("${seconds}s")
+  fi
+
+  printf '%s' "${parts[0]}"
+  if [[ "${#parts[@]}" -gt 1 ]]; then
+    printf ' %s' "${parts[1]}"
+  fi
+}
+
+format_percent() {
+  local value="$1"
+  if [[ -z "${value}" || "${value}" == "null" ]]; then
+    echo "?"
+    return 0
+  fi
+  printf '%.0f' "${value}"
+}
+
+percent_bar() {
+  local percent="$1"
+  local width="${2:-20}"
+  local filled=0
+  local empty=0
+  local bar=""
+  local i
+
+  if [[ -z "${percent}" || ! "${percent}" =~ ^[0-9]+$ ]]; then
+    percent=0
+  fi
+  if (( percent < 0 )); then
+    percent=0
+  elif (( percent > 100 )); then
+    percent=100
+  fi
+
+  filled=$((percent * width / 100))
+  empty=$((width - filled))
+  for ((i = 0; i < filled; i++)); do bar+="#"; done
+  for ((i = 0; i < empty; i++)); do bar+="."; done
+  printf '%s' "${bar}"
+}
+
+percent_style_code() {
+  local percent="$1"
+  if [[ -z "${percent}" || ! "${percent}" =~ ^[0-9]+$ ]]; then
+    echo "0"
+    return 0
+  fi
+  if (( percent >= 90 )); then
+    echo "31"
+  elif (( percent >= 70 )); then
+    echo "33"
+  else
+    echo "32"
+  fi
+}
+
+short_id() {
+  local id="$1"
+  if [[ -z "${id}" || "${id}" == "unknown" ]]; then
+    echo "unknown"
+    return 0
+  fi
+  local len="${#id}"
+  if (( len <= 14 )); then
+    echo "${id}"
+    return 0
+  fi
+  echo "${id:0:8}..${id:len-6:6}"
+}
+
+validate_saved_account_exists() {
+  local account="$1"
+  local primary="${STORE_DIR}/${account}.json"
+  local legacy_store="${LEGACY_STORE_DIR}/${account}.json"
+  local legacy_opencode="${LEGACY_OPENCODE_DIR}/${account}.json"
+
+  if [[ ! -f "${primary}" && ! -f "${legacy_store}" && ! -f "${legacy_opencode}" ]]; then
+    fail "Account not found in saved store: ${account}"
+  fi
+}
+
+saved_account_id_by_name() {
+  local account="$1"
+  local primary="${STORE_DIR}/${account}.json"
+  local legacy_store="${LEGACY_STORE_DIR}/${account}.json"
+  local legacy_opencode="${LEGACY_OPENCODE_DIR}/${account}.json"
+  local source=""
+
+  if [[ -f "${primary}" ]]; then
+    source="${primary}"
+  elif [[ -f "${legacy_store}" ]]; then
+    source="${legacy_store}"
+  elif [[ -f "${legacy_opencode}" ]]; then
+    source="${legacy_opencode}"
+  else
+    echo ""
+    return 0
+  fi
+
+  account_id_from_saved_file "${source}"
+}
+
+pool_has_account() {
+  local account="$1"
+  jq -e --arg account "${account}" '.accounts | index($account) != null' "${CODEX_POOL_FILE}" >/dev/null 2>&1
+}
+
+saved_account_names_raw() {
+  find "${STORE_DIR}" -maxdepth 1 -type f -name '*.json' 2>/dev/null     | sed 's#^.*/##'     | sed 's#\.json$##'     | sort
+}
+
+saved_account_count() {
+  saved_account_names_raw | wc -l | tr -d ' '
+}
+
+in_list() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    if [[ "${item}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+pool_reconcile_saved_accounts() {
+  local saved=()
+  local current=()
+  local final=()
+  local account
+  local tmp
+  local changed=0
+
+  ensure_codex_pool_file
+
+  while IFS= read -r account; do
+    [[ -z "${account}" ]] || saved+=("${account}")
+  done < <(saved_account_names_raw)
+  [[ "${#saved[@]}" -gt 0 ]] || fail "No saved accounts available to reconcile into the pool."
+
+  while IFS= read -r account; do
+    [[ -z "${account}" ]] || current+=("${account}")
+  done < <(pool_list_accounts)
+
+  for account in "${current[@]}"; do
+    if in_list "${account}" "${saved[@]}"; then
+      final+=("${account}")
+    else
+      changed=1
+    fi
+  done
+
+  for account in "${saved[@]}"; do
+    if ! in_list "${account}" "${final[@]}"; then
+      final+=("${account}")
+      changed=1
+    fi
+  done
+
+  [[ "${#final[@]}" -gt 0 ]] || fail "Unable to reconcile pool: no valid saved accounts."
+
+  if [[ "${changed}" -eq 0 ]]; then
+    return 1
+  fi
+
+  tmp="$(new_tmp)"
+  jq \
+    --arg updated_at "$(now_utc)" \
+    '.last_account as $last
+     | .accounts = $ARGS.positional
+     | .cooldowns = ((.cooldowns // {}) | to_entries | map(select(.key as $k | ($ARGS.positional | index($k)) != null)) | from_entries)
+     | .last_account = (if ($last != null and ($ARGS.positional | index($last)) == null) then null else $last end)
+     | .updated_at = $updated_at' \
+    "${CODEX_POOL_FILE}" \
+    --args "${final[@]}" > "${tmp}"
+  mv "${tmp}" "${CODEX_POOL_FILE}"
+  chmod 600 "${CODEX_POOL_FILE}" || true
+  echo "Reconciled Codex rotation pool with saved accounts."
+  return 0
+}
+
+pool_sync_saved_accounts() {
+  local names=()
+  local name
+
+  while IFS= read -r name; do
+    [[ -z "${name}" ]] || names+=("${name}")
+  done < <(saved_account_names_raw)
+
+  [[ "${#names[@]}" -gt 0 ]] || fail "No saved accounts available to sync into the pool."
+  pool_set_accounts "${names[@]}"
+}
+
+pool_set_accounts() {
+  local accounts=("$@")
+  local account
+  local tmp
+
+  ensure_codex_pool_file
+  [[ "${#accounts[@]}" -gt 0 ]] || fail "Usage: ai pool-set <account> [account...]"
+
+  for account in "${accounts[@]}"; do
+    validate_account_name "${account}"
+    validate_saved_account_exists "${account}"
+  done
+
+  tmp="$(new_tmp)"
+  jq -n \
+    --arg updated_at "$(now_utc)" \
+    '{accounts: $ARGS.positional, cooldowns: {}, last_account: null, updated_at: $updated_at}' \
+    --args "${accounts[@]}" > "${tmp}"
+  mv "${tmp}" "${CODEX_POOL_FILE}"
+  chmod 600 "${CODEX_POOL_FILE}" || true
+  echo "Codex rotation pool set to: ${accounts[*]}"
+}
+
+pool_add_accounts() {
+  local accounts=("$@")
+  local account
+  local tmp
+
+  ensure_codex_pool_file
+  [[ "${#accounts[@]}" -gt 0 ]] || fail "Usage: ai pool-add <account> [account...]"
+
+  for account in "${accounts[@]}"; do
+    validate_account_name "${account}"
+    validate_saved_account_exists "${account}"
+  done
+
+  tmp="$(new_tmp)"
+  jq \
+    --arg updated_at "$(now_utc)" \
+    '.accounts = ((.accounts + $ARGS.positional) | unique)
+     | .updated_at = $updated_at' \
+    "${CODEX_POOL_FILE}" \
+    --args "${accounts[@]}" > "${tmp}"
+  mv "${tmp}" "${CODEX_POOL_FILE}"
+  chmod 600 "${CODEX_POOL_FILE}" || true
+  echo "Added to Codex rotation pool: ${accounts[*]}"
+}
+
+pool_remove_accounts() {
+  local accounts=("$@")
+  local account
+  local tmp
+
+  ensure_codex_pool_file
+  [[ "${#accounts[@]}" -gt 0 ]] || fail "Usage: ai pool-remove <account> [account...]"
+
+  for account in "${accounts[@]}"; do
+    validate_account_name "${account}"
+  done
+
+  tmp="$(new_tmp)"
+  jq \
+    --arg updated_at "$(now_utc)" \
+    '.accounts = [.accounts[] | select(($ARGS.positional | index(.)) == null)]
+     | .cooldowns = ((.cooldowns // {}) | to_entries | map(select(.key as $k | ($ARGS.positional | index($k)) == null)) | from_entries)
+     | .last_account = (if (.last_account != null and ($ARGS.positional | index(.last_account)) != null) then null else .last_account end)
+     | .updated_at = $updated_at' \
+    "${CODEX_POOL_FILE}" \
+    --args "${accounts[@]}" > "${tmp}"
+  mv "${tmp}" "${CODEX_POOL_FILE}"
+  chmod 600 "${CODEX_POOL_FILE}" || true
+  echo "Removed from Codex rotation pool: ${accounts[*]}"
+}
+
+pool_reset_cooldowns() {
+  local accounts=("$@")
+  local tmp
+  local account
+
+  ensure_codex_pool_file
+  tmp="$(new_tmp)"
+
+  if [[ "${#accounts[@]}" -eq 0 ]]; then
+    jq --arg updated_at "$(now_utc)" '
+      .cooldowns = {}
+      | .updated_at = $updated_at
+    ' "${CODEX_POOL_FILE}" > "${tmp}"
+    mv "${tmp}" "${CODEX_POOL_FILE}"
+    chmod 600 "${CODEX_POOL_FILE}" || true
+    echo "Cleared all Codex pool cooldowns."
+    return 0
+  fi
+
+  for account in "${accounts[@]}"; do
+    validate_account_name "${account}"
+  done
+
+  jq \
+    --arg updated_at "$(now_utc)" \
+    '.cooldowns = ((.cooldowns // {}) | to_entries | map(select(.key as $k | ($ARGS.positional | index($k)) == null)) | from_entries)
+     | .updated_at = $updated_at' \
+    "${CODEX_POOL_FILE}" \
+    --args "${accounts[@]}" > "${tmp}"
+  mv "${tmp}" "${CODEX_POOL_FILE}"
+  chmod 600 "${CODEX_POOL_FILE}" || true
+  echo "Cleared Codex pool cooldowns for: ${accounts[*]}"
+}
+
+pool_list_accounts() {
+  ensure_codex_pool_file
+  jq -r '.accounts[]?' "${CODEX_POOL_FILE}"
+}
+
+pool_status() {
+  local tmp
+  local now_epoch
+  local account
+  local until_epoch
+  local reason
+  local remaining
+  local status_label
+
+  ensure_codex_pool_file
+  tmp="$(new_tmp)"
+  now_epoch="$(date +%s)"
+  jq \
+    --arg now "$(date +%s)" \
+    '{
+      accounts: (.accounts // []),
+      last_account: (.last_account // null),
+      cooldowns: (
+        .cooldowns // {}
+        | with_entries(.value = (
+            if ((.value.until_epoch // 0) | tonumber) > ($now | tonumber) then
+              .value + {active: true}
+            else
+              .value + {active: false}
+            end
+          ))
+      )
+    }' "${CODEX_POOL_FILE}" > "${tmp}"
+
+  echo "Codex rotation pool:"
+  jq -r '
+    if (.accounts | length) == 0 then
+      "  (empty)"
+    else
+      .accounts[] | "  " + .
+    end
+  ' "${tmp}"
+
+  echo "Last selected: $(jq -r '.last_account // "none"' "${tmp}")"
+  echo "Cooldowns:"
+  if [[ "$(jq '.cooldowns | keys | length' "${tmp}")" -eq 0 ]]; then
+    echo "  none"
+    return 0
+  fi
+
+  while IFS=$'\t' read -r account until_epoch reason; do
+    [[ -n "${account}" ]] || continue
+    if [[ "${until_epoch}" =~ ^[0-9]+$ ]] && (( until_epoch > now_epoch )); then
+      remaining=$((until_epoch - now_epoch))
+      status_label="active"
+    else
+      remaining=0
+      status_label="expired"
+    fi
+    echo "  ${account}: ${status_label}, reason=${reason:-unknown}, until $(format_epoch_utc "${until_epoch}") (in $(format_duration "${remaining}"))"
+  done < <(
+    jq -r '
+      .cooldowns
+      | to_entries[]
+      | [
+          .key,
+          ((.value.until_epoch // 0) | tostring),
+          (.value.reason // "unknown")
+        ]
+      | @tsv
+    ' "${tmp}"
+  )
+}
+
+pool_next_account() {
+  local exclude_account="${1:-}"
+  local now_epoch
+  local account
+
+  ensure_codex_pool_file
+  now_epoch="$(date +%s)"
+
+  while IFS= read -r account; do
+    [[ -n "${account}" ]] || continue
+    if [[ -n "${exclude_account}" && "${account}" == "${exclude_account}" ]]; then
+      continue
+    fi
+    if jq -e --arg account "${account}" --arg now "${now_epoch}" '
+      (.cooldowns[$account].until_epoch // 0) <= ($now | tonumber)
+    ' "${CODEX_POOL_FILE}" >/dev/null 2>&1; then
+      echo "${account}"
+      return 0
+    fi
+  done < <(
+    jq -r '
+      .accounts as $accounts
+      | .last_account as $last
+      | if ($accounts | length) == 0 then
+          empty
+        elif $last == null then
+          $accounts[]
+        else
+          (($accounts | index($last)) // -1) as $idx
+          | [range(1; ($accounts | length) + 1) | $accounts[(($idx + .) % ($accounts | length))]] | .[]
+        end
+    ' "${CODEX_POOL_FILE}"
+  )
+
+  return 1
+}
+
+pool_mark_selected() {
+  local account="$1"
+  local tmp
+
+  ensure_codex_pool_file
+  tmp="$(new_tmp)"
+  jq --arg account "${account}" --arg updated_at "$(now_utc)" '
+    .last_account = $account
+    | .updated_at = $updated_at
+  ' "${CODEX_POOL_FILE}" > "${tmp}"
+  mv "${tmp}" "${CODEX_POOL_FILE}"
+  chmod 600 "${CODEX_POOL_FILE}" || true
+}
+
+pool_mark_cooldown() {
+  local account="$1"
+  local until_epoch="$2"
+  local reason="$3"
+  local tmp
+
+  ensure_codex_pool_file
+  tmp="$(new_tmp)"
+  jq \
+    --arg account "${account}" \
+    --arg reason "${reason}" \
+    --arg updated_at "$(now_utc)" \
+    --argjson until_epoch "${until_epoch}" '
+    .cooldowns = (.cooldowns // {})
+    | .cooldowns[$account] = {
+        until_epoch: $until_epoch,
+        reason: $reason,
+        updated_at: $updated_at
+      }
+    | .updated_at = $updated_at
+  ' "${CODEX_POOL_FILE}" > "${tmp}"
+  mv "${tmp}" "${CODEX_POOL_FILE}"
+  chmod 600 "${CODEX_POOL_FILE}" || true
+}
+
+pool_account_available() {
+  local account="$1"
+  local now_epoch
+  ensure_codex_pool_file
+  [[ -n "${account}" ]] || return 1
+  now_epoch="$(date +%s)"
+  jq -e --arg account "${account}" --arg now "${now_epoch}" '
+    (.accounts | index($account)) != null
+    and ((.cooldowns[$account].until_epoch // 0) <= ($now | tonumber))
+  ' "${CODEX_POOL_FILE}" >/dev/null 2>&1
+}
+
+update_managed_codex_session_state() {
+  local session_id="$1"
+  local session_file="$2"
+  local cwd="$3"
+  local account="$4"
+  local pending_resume="$5"
+  local last_exit_reason="$6"
+  local tmp
+
+  ensure_codex_session_state_file
+  tmp="$(new_tmp)"
+  jq \
+    --arg session_id "${session_id}" \
+    --arg session_file "${session_file}" \
+    --arg cwd "${cwd}" \
+    --arg account "${account}" \
+    --arg last_exit_reason "${last_exit_reason}" \
+    --arg updated_at "$(now_utc)" \
+    --argjson pending_resume "${pending_resume}" '
+    .session_id = (if $session_id == "" then null else $session_id end)
+    | .session_file = (if $session_file == "" then null else $session_file end)
+    | .cwd = (if $cwd == "" then null else $cwd end)
+    | .account = (if $account == "" then null else $account end)
+    | .pending_resume = $pending_resume
+    | .last_exit_reason = (if $last_exit_reason == "" then null else $last_exit_reason end)
+    | .updated_at = $updated_at
+  ' "${CODEX_SESSION_STATE_FILE}" > "${tmp}"
+  mv "${tmp}" "${CODEX_SESSION_STATE_FILE}"
+  chmod 600 "${CODEX_SESSION_STATE_FILE}" || true
+}
+
+resolve_pending_managed_codex_resume() {
+  local cwd_filter="$1"
+  local stored_session_id=""
+  local stored_account=""
+  local stored_cwd=""
+  local normalized_stored=""
+  local normalized_filter=""
+
+  ensure_codex_session_state_file
+  stored_session_id="$(jq -r '.session_id // empty' "${CODEX_SESSION_STATE_FILE}")"
+  stored_account="$(jq -r '.account // empty' "${CODEX_SESSION_STATE_FILE}")"
+  stored_cwd="$(jq -r '.cwd // empty' "${CODEX_SESSION_STATE_FILE}")"
+
+  [[ "$(jq -r '.pending_resume // false' "${CODEX_SESSION_STATE_FILE}")" == "true" ]] || return 1
+  [[ -n "${stored_session_id}" ]] || return 1
+
+  if [[ -n "${cwd_filter}" && -n "${stored_cwd}" ]]; then
+    if [[ "${stored_cwd}" != "${cwd_filter}" ]]; then
+      normalized_stored="$(normalize_path "${stored_cwd}" || true)"
+      normalized_filter="$(normalize_path "${cwd_filter}" || true)"
+      [[ -n "${normalized_stored}" && -n "${normalized_filter}" && "${normalized_stored}" == "${normalized_filter}" ]] || return 1
+    fi
+  fi
+
+  printf '%s\t%s\n' "${stored_session_id}" "${stored_account}"
+}
+
+pool_set_manual_cooldown() {
+  local account="$1"
+  local duration_seconds="${2:-${DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS}}"
+  local until_epoch
+
+  ensure_codex_pool_file
+  validate_account_name "${account}"
+  pool_has_account "${account}" || fail "Account is not in the Codex rotation pool: ${account}"
+  [[ "${duration_seconds}" =~ ^[0-9]+$ ]] || fail "Cooldown seconds must be an integer."
+  until_epoch=$(( $(date +%s) + duration_seconds ))
+  pool_mark_cooldown "${account}" "${until_epoch}" "manual"
+  echo "Marked '${account}' on cooldown for ${duration_seconds}s."
+}
+
+codex_wrapper_body() {
+  local ai_path="$1"
+  local real_bin="$2"
+  cat <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export AI_SWITCH_CODEX_BIN="${real_bin}"
+export AI_SWITCH_WRAPPER_SELF="\$0"
+exec "${ai_path}" codex "\$@"
+EOF
+}
+
+codex_wrapper_installed() {
+  local target="${1:-${DEFAULT_CODEX_WRAPPER_TARGET}}"
+  [[ -f "${target}" ]] || return 1
+  grep -q 'AI_SWITCH_WRAPPER_SELF' "${target}" 2>/dev/null
+}
+
+codex_wrapper_status() {
+  local target="${1:-${DEFAULT_CODEX_WRAPPER_TARGET}}"
+  local backup="${2:-${DEFAULT_CODEX_WRAPPER_BACKUP}}"
+
+  echo "Codex wrapper target: ${target}"
+  if codex_wrapper_installed "${target}"; then
+    echo "Status: installed"
+  else
+    echo "Status: not installed"
+  fi
+
+  if [[ -f "${backup}" ]]; then
+    echo "Backup: ${backup}"
+  else
+    echo "Backup: missing"
+  fi
+}
+
+install_codex_wrapper() {
+  local target="${1:-${DEFAULT_CODEX_WRAPPER_TARGET}}"
+  local backup="${2:-${DEFAULT_CODEX_WRAPPER_BACKUP}}"
+  local ai_path
+  local target_dir
+  local tmp
+
+  ai_path="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  target_dir="$(dirname "${target}")"
+  mkdir -p "${target_dir}"
+
+  if codex_wrapper_installed "${target}"; then
+    echo "Codex wrapper already installed at ${target}"
+    return 0
+  fi
+
+  if [[ ! -f "${target}" ]]; then
+    fail "No existing codex entrypoint found at ${target}. Create one first or pass a different target path."
+  fi
+
+  if [[ ! -f "${backup}" ]]; then
+    cp "${target}" "${backup}"
+    chmod +x "${backup}" || true
+  fi
+
+  tmp="$(new_tmp)"
+  codex_wrapper_body "${ai_path}" "${backup}" > "${tmp}"
+  mv "${tmp}" "${target}"
+  chmod +x "${target}" || true
+  echo "Installed ai-switch Codex wrapper at ${target}"
+  echo "Backup real Codex entrypoint: ${backup}"
+}
+
+uninstall_codex_wrapper() {
+  local target="${1:-${DEFAULT_CODEX_WRAPPER_TARGET}}"
+  local backup="${2:-${DEFAULT_CODEX_WRAPPER_BACKUP}}"
+
+  codex_wrapper_installed "${target}" || fail "No ai-switch wrapper is installed at ${target}."
+  [[ -f "${backup}" ]] || fail "Cannot restore wrapper target because backup is missing: ${backup}"
+
+  cp "${backup}" "${target}"
+  chmod +x "${target}" || true
+  echo "Restored Codex entrypoint from ${backup}"
 }
 
 validate_codex_auth_file() {
@@ -500,50 +1358,1851 @@ list_active_profiles() {
 }
 
 show_usage_limits() {
-  local session="codex-status"
-  local output
-  local tmux_socket="ai-switch"
+  local active_account=""
+  local snapshot=""
+  local p_used=""
+  local p_reset=""
+  local s_used=""
+  local s_reset=""
+  local now_epoch
+  local p_pct
+  local s_pct
+  local p_in="unknown"
+  local s_in="unknown"
 
-  tmux_cmd() {
-    TMUX= tmux -L "$tmux_socket" "$@"
-  }
+  ensure_codex_limits_file
+  refresh_active_account_limits_from_latest_session >/dev/null 2>&1 || true
+
+  active_account="$(active_account_for_platform codex)"
+  case "${active_account}" in
+    ""|unknown|not\ configured)
+      warn "Could not determine active Codex account."
+      return 1
+      ;;
+  esac
+
+  snapshot="$(jq -rc --arg account "${active_account}" '.accounts[$account] // empty' "${CODEX_LIMITS_FILE}" || true)"
+  if [[ -z "${snapshot}" ]]; then
+    warn "No limits snapshot available for '${active_account}'. Run: ai status --refresh"
+    return 1
+  fi
+
+  p_used="$(jq -r '.primary.used_percent // empty' <<< "${snapshot}")"
+  p_reset="$(jq -r '.primary.resets_at // empty' <<< "${snapshot}")"
+  s_used="$(jq -r '.secondary.used_percent // empty' <<< "${snapshot}")"
+  s_reset="$(jq -r '.secondary.resets_at // empty' <<< "${snapshot}")"
+  now_epoch="$(date +%s)"
+  if [[ "${p_reset}" =~ ^[0-9]+$ ]]; then
+    p_in="$(format_duration "$((p_reset - now_epoch))")"
+  fi
+  if [[ "${s_reset}" =~ ^[0-9]+$ ]]; then
+    s_in="$(format_duration "$((s_reset - now_epoch))")"
+  fi
+
+  p_pct="$(format_percent "${p_used}")"
+  s_pct="$(format_percent "${s_used}")"
+  echo "5h ${p_pct}% (resets $(format_epoch_utc "${p_reset}"), in ${p_in}) · weekly ${s_pct}% (resets $(format_epoch_utc "${s_reset}"), in ${s_in})"
+}
+
+codex_process_running() {
+  pgrep -fa '(^|[ /])codex([[:space:]]|$)' >/dev/null 2>&1
+}
+
+app_server_probe_available() {
+  command -v "${AI_SWITCH_CODEX_BIN}" >/dev/null 2>&1 || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  return 0
+}
+
+account_needs_limits_refresh() {
+  local account="$1"
+  local now_epoch="$2"
+  local captured_at=""
+  local captured_epoch=""
+
+  ensure_codex_limits_file
+  captured_at="$(jq -r --arg account "${account}" '.accounts[$account].captured_at // empty' "${CODEX_LIMITS_FILE}")"
+  [[ -n "${captured_at}" ]] || return 0
+  captured_epoch="$(iso_to_epoch "${captured_at}")"
+  [[ -n "${captured_epoch}" ]] || return 0
+
+  if (( now_epoch - captured_epoch >= STATUS_STALE_SECONDS )); then
+    return 0
+  fi
+  return 1
+}
+
+probe_rate_limits_snapshot_via_app_server_unified() {
+  local unified_file="$1"
+  local probe_home=""
+  local probe_auth=""
+
+  [[ -f "${unified_file}" ]] || return 1
+  app_server_probe_available || return 1
+
+  probe_home="$(new_tmp_dir)"
+  probe_auth="${probe_home}/auth.json"
+  build_codex_auth_from_unified "${unified_file}" > "${probe_auth}"
+  chmod 600 "${probe_auth}" || true
+
+  CODEX_HOME="${probe_home}" AI_SWITCH_CODEX_BIN="${AI_SWITCH_CODEX_BIN}" python3 - <<'PY'
+import json
+import os
+import select
+import subprocess
+import sys
+import time
+
+codex_bin = os.environ.get("AI_SWITCH_CODEX_BIN", "codex")
+request_id = "rate-limits-read-1"
+
+proc = subprocess.Popen(
+    [codex_bin, "app-server", "--listen", "stdio://"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    bufsize=1,
+)
+
+def send(msg):
+    proc.stdin.write(json.dumps(msg, separators=(",", ":")) + "\n")
+    proc.stdin.flush()
+
+def fail():
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=1.5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    raise SystemExit(1)
+
+try:
+    send(
+        {
+            "id": "init-1",
+            "method": "initialize",
+            "params": {
+                "clientInfo": {"name": "ai-switch", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": False},
+            },
+        }
+    )
+    send({"method": "initialized", "params": {}})
+    send({"id": request_id, "method": "account/rateLimits/read", "params": None})
+
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        ready, _, _ = select.select([proc.stdout, proc.stderr], [], [], 0.5)
+        for stream in ready:
+            line = stream.readline()
+            if not line:
+                continue
+            if stream is proc.stderr:
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except Exception:
+                continue
+            if msg.get("id") != request_id:
+                continue
+            result = msg.get("result")
+            if not isinstance(result, dict):
+                fail()
+            by_limit = result.get("rateLimitsByLimitId")
+            snapshot = None
+            if isinstance(by_limit, dict):
+                snapshot = by_limit.get("codex")
+                if snapshot is None and len(by_limit) == 1:
+                    snapshot = next(iter(by_limit.values()))
+            if snapshot is None:
+                snapshot = result.get("rateLimits")
+            if not isinstance(snapshot, dict):
+                fail()
+            print(json.dumps(snapshot, separators=(",", ":")))
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            raise SystemExit(0)
+    fail()
+except SystemExit:
+    raise
+except Exception:
+    fail()
+PY
+}
+
+app_server_snapshot_to_event_json() {
+  local snapshot_json="$1"
+  jq -nc --arg captured_at "$(now_utc)" --argjson snapshot "${snapshot_json}" '
+    {
+      captured_at: $captured_at,
+      rate_limits: {
+        limit_id: ($snapshot.limitId // null),
+        limit_name: ($snapshot.limitName // null),
+        plan_type: ($snapshot.planType // null),
+        primary: (
+          if ($snapshot.primary | type) == "object" then
+            {
+              used_percent: ($snapshot.primary.usedPercent // null),
+              window_minutes: ($snapshot.primary.windowDurationMins // null),
+              resets_at: ($snapshot.primary.resetsAt // null)
+            }
+          else
+            null
+          end
+        ),
+        secondary: (
+          if ($snapshot.secondary | type) == "object" then
+            {
+              used_percent: ($snapshot.secondary.usedPercent // null),
+              window_minutes: ($snapshot.secondary.windowDurationMins // null),
+              resets_at: ($snapshot.secondary.resetsAt // null)
+            }
+          else
+            null
+          end
+        ),
+        credits: (
+          if ($snapshot.credits | type) == "object" then
+            {
+              has_credits: ($snapshot.credits.hasCredits // null),
+              unlimited: ($snapshot.credits.unlimited // null),
+              balance: ($snapshot.credits.balance // null)
+            }
+          else
+            null
+          end
+        )
+      }
+    }
+  '
+}
+
+refresh_account_limits_via_app_server() {
+  local account="$1"
+  local unified_file=""
+  local snapshot_json=""
+  local event_json=""
+
+  unified_file="$(prepare_account_entry "${account}")" || return 1
+  snapshot_json="$(probe_rate_limits_snapshot_via_app_server_unified "${unified_file}" || true)"
+  [[ -n "${snapshot_json}" ]] || return 1
+  event_json="$(app_server_snapshot_to_event_json "${snapshot_json}" || true)"
+  [[ -n "${event_json}" ]] || return 1
+  cache_account_rate_limits "${account}" "chatgpt-app-server" "" "${event_json}"
+}
+
+probe_current_codex_session_file() {
+  local session_name="ai-status-$RANDOM-$$"
+  local tmux_socket="ai-switch-status"
+  local stamp_file
+  local waited=0
+  local max_wait=$((STATUS_PROBE_EXIT_WAIT_SECONDS * 2))
+
+  stamp_file="$(new_tmp)"
+  : > "${stamp_file}"
+
+  TMUX= tmux -L "${tmux_socket}" kill-session -t "${session_name}" 2>/dev/null || true
+  TMUX= tmux -L "${tmux_socket}" new-session -d -s "${session_name}" || return 1
+
+  TMUX= tmux -L "${tmux_socket}" send-keys -t "${session_name}" "${AI_SWITCH_CODEX_BIN} --no-alt-screen" C-m
+  sleep "${STATUS_PROBE_START_WAIT_SECONDS}"
+  TMUX= tmux -L "${tmux_socket}" send-keys -t "${session_name}" "/status" C-m
+  sleep "${STATUS_PROBE_COMMAND_WAIT_SECONDS}"
+  TMUX= tmux -L "${tmux_socket}" send-keys -t "${session_name}" "/exit" C-m
+
+  while (( waited < max_wait )); do
+    if ! TMUX= tmux -L "${tmux_socket}" has-session -t "${session_name}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+
+  TMUX= tmux -L "${tmux_socket}" kill-session -t "${session_name}" 2>/dev/null || true
+  detect_recent_session_file "${stamp_file}" "${PWD}" || true
+}
+
+refresh_codex_limits_cache_for_accounts() {
+  local force_refresh="$1"
+  local allow_when_running="$2"
+  shift 2
+  local accounts=("$@")
+  local now_epoch
+  local account
+  local session_file
+  local session_id
+  local original_auth
+  local refreshed=0
+  local fallback_accounts=()
+
+  [[ "${#accounts[@]}" -gt 0 ]] || return 0
+
+  now_epoch="$(date +%s)"
+
+  if app_server_probe_available; then
+    for account in "${accounts[@]}"; do
+      if [[ "${force_refresh}" -ne 1 ]] && ! account_needs_limits_refresh "${account}" "${now_epoch}"; then
+        continue
+      fi
+      if refresh_account_limits_via_app_server "${account}"; then
+        refreshed=$((refreshed + 1))
+      else
+        fallback_accounts+=("${account}")
+      fi
+    done
+  else
+    fallback_accounts=("${accounts[@]}")
+  fi
+
+  if [[ "${refreshed}" -gt 0 ]]; then
+    echo "Refreshed live limits for ${refreshed} account(s) via app-server."
+  fi
+
+  [[ "${#fallback_accounts[@]}" -gt 0 ]] || return 0
 
   if ! command -v tmux >/dev/null 2>&1; then
-    warn "tmux is required for 'ai usage'."
+    warn "tmux not found; skipping fallback status probes for ${#fallback_accounts[@]} account(s)."
     return 1
   fi
 
-  if ! command -v codex >/dev/null 2>&1; then
-    warn "codex CLI is required for 'ai usage'."
+  if ! command -v "${AI_SWITCH_CODEX_BIN}" >/dev/null 2>&1; then
+    warn "Codex CLI not found (${AI_SWITCH_CODEX_BIN}); skipping fallback status probes."
     return 1
   fi
 
-  tmux_cmd kill-session -t "$session" 2>/dev/null || true
-  if ! tmux_cmd new-session -d -s "$session"; then
-    warn "Failed to create tmux session '${session}'."
+  if [[ "${allow_when_running}" -ne 1 ]] && codex_process_running; then
+    warn "Codex process detected; skipped fallback status probes for ${#fallback_accounts[@]} account(s)."
     return 1
   fi
 
-  tmux_cmd send-keys -t "$session" "codex" C-m
-  sleep 5
-  tmux_cmd send-keys -t "$session" "/status" C-m
-  sleep 2
-
-  output="$(
-    tmux_cmd capture-pane -t "$session" -p -S -200 \
-    | tr -d '\r' \
-    | grep -Eo '[0-9]+h [0-9]+%|weekly [0-9]+%' \
-    | paste -sd ' · ' -
-  )"
-
-  tmux_cmd kill-session -t "$session" 2>/dev/null || true
-
-  if [[ -n "$output" ]]; then
-    echo "$output"
+  if [[ -f "${CODEX_AUTH_FILE}" ]]; then
+    original_auth="$(new_tmp)"
+    cp "${CODEX_AUTH_FILE}" "${original_auth}"
   else
-    warn "Could not parse Codex limits."
+    original_auth=""
+  fi
+
+  # Ensure the auth file is restored even if the user hits Ctrl+C during the slow probes
+  trap '
+    if [[ -n "${original_auth}" && -f "${original_auth}" ]]; then
+      cp "${original_auth}" "${CODEX_AUTH_FILE}" 2>/dev/null || true
+      chmod 600 "${CODEX_AUTH_FILE}" 2>/dev/null || true
+      generate_sync_file >/dev/null 2>&1 || true
+    fi
+    trap - INT TERM EXIT
+    exit 130
+  ' INT TERM EXIT
+
+  for account in "${fallback_accounts[@]}"; do
+    if ! use_account_platform codex "${account}" >/dev/null 2>&1; then
+      warn "Skipping fallback status probe for '${account}' (could not switch auth)."
+      continue
+    fi
+    session_file="$(probe_current_codex_session_file || true)"
+    if [[ -z "${session_file}" ]]; then
+      warn "No fallback session data captured for '${account}'."
+      continue
+    fi
+    session_id="$(extract_session_id_from_file "${session_file}" || true)"
+    if cache_rate_limits_from_session_file "${account}" "${session_file}" "chatgpt-session" "${session_id}"; then
+      refreshed=$((refreshed + 1))
+    else
+      warn "Fallback status probe for '${account}' did not produce rate limit metadata."
+    fi
+  done
+
+  # Clear trap and restore normally
+  trap - INT TERM EXIT
+  if [[ -n "${original_auth}" && -f "${original_auth}" ]]; then
+    cp "${original_auth}" "${CODEX_AUTH_FILE}"
+    chmod 600 "${CODEX_AUTH_FILE}" || true
+    generate_sync_file
+  fi
+
+  if [[ "${refreshed}" -gt 0 ]]; then
+    echo "Refreshed total limits snapshots: ${refreshed} account(s)."
+  fi
+}
+
+render_limit_line() {
+  local label="$1"
+  local used_percent="$2"
+  local resets_at="$3"
+  local now_epoch="$4"
+  local pct
+  local bar
+  local style
+  local pct_view
+  local reset_at_view
+  local reset_in
+
+  if [[ -z "${used_percent}" || "${used_percent}" == "null" || -z "${resets_at}" || "${resets_at}" == "null" ]]; then
+    echo "${label}: no data"
+    return 0
+  fi
+
+  pct="$(format_percent "${used_percent}")"
+  bar="$(percent_bar "${pct}" 20)"
+  style="$(percent_style_code "${pct}")"
+  pct_view="$(colorize "${style}" "${pct}%")"
+  reset_at_view="$(format_epoch_utc "${resets_at}")"
+  reset_in="$(format_duration "$((resets_at - now_epoch))")"
+  echo "${label}: [${bar}] ${pct_view} used  | reset ${reset_at_view} (in ${reset_in})"
+}
+
+render_limit_compact() {
+  local used_percent="$1"
+  local resets_at="$2"
+  local now_epoch="$3"
+  local pct
+  local bar
+  local style
+  local pct_view
+  local reset_in
+
+  if [[ -z "${used_percent}" || "${used_percent}" == "null" || -z "${resets_at}" || "${resets_at}" == "null" ]]; then
+    echo "[....................] --%"
+    return 0
+  fi
+  pct="$(format_percent "${used_percent}")"
+  bar="$(percent_bar "${pct}" 20)"
+  style="$(percent_style_code "${pct}")"
+  pct_view="$(colorize "${style}" "${pct}%")"
+  reset_in="$(format_duration "$((resets_at - now_epoch))")"
+  echo "[${bar}] ${pct_view} +${reset_in}"
+}
+
+percent_int_or_default() {
+  local raw="$1"
+  local fallback="${2:-999}"
+  local pct
+  pct="$(format_percent "${raw}")"
+  if [[ -z "${pct}" || ! "${pct}" =~ ^[0-9]+$ ]]; then
+    echo "${fallback}"
+    return 0
+  fi
+  echo "${pct}"
+}
+
+reset_bias_score() {
+  local resets_at="$1"
+  local now_epoch="$2"
+  local delta
+  local hours
+  if [[ -z "${resets_at}" || ! "${resets_at}" =~ ^[0-9]+$ ]]; then
+    echo "999"
+    return 0
+  fi
+  delta=$((resets_at - now_epoch))
+  if (( delta <= 0 )); then
+    echo "0"
+    return 0
+  fi
+  hours=$((delta / 3600))
+  if (( hours > 999 )); then
+    hours=999
+  fi
+  echo "${hours}"
+}
+
+account_rotation_score() {
+  local account="$1"
+  local now_epoch="$2"
+  local primary_used=""
+  local secondary_used=""
+  local primary_reset=""
+  local has_data=1
+  local primary_i
+  local secondary_i
+  local reset_bias
+  local score
+
+  primary_used="$(jq -r --arg account "${account}" '.accounts[$account].primary.used_percent // empty' "${CODEX_LIMITS_FILE}")"
+  secondary_used="$(jq -r --arg account "${account}" '.accounts[$account].secondary.used_percent // empty' "${CODEX_LIMITS_FILE}")"
+  primary_reset="$(jq -r --arg account "${account}" '.accounts[$account].primary.resets_at // empty' "${CODEX_LIMITS_FILE}")"
+
+  if [[ -z "${primary_used}" && -z "${secondary_used}" ]]; then
+    has_data=0
+  fi
+
+  primary_i="$(percent_int_or_default "${primary_used}" 999)"
+  secondary_i="$(percent_int_or_default "${secondary_used}" 999)"
+  reset_bias="$(reset_bias_score "${primary_reset}" "${now_epoch}")"
+  score=$((secondary_i * 100000 + primary_i * 1000 + reset_bias))
+
+  echo "${score}|${has_data}|${primary_i}|${secondary_i}|${primary_reset}"
+}
+
+select_best_ready_account() {
+  local now_epoch="$1"
+  shift
+  local accounts=("$@")
+  local account
+  local best_account=""
+  local best_score=""
+  local best_has_data=0
+  local cooldown_until=0
+  local info
+  local score
+  local has_data
+
+  for account in "${accounts[@]}"; do
+    cooldown_until="$(jq -r --arg account "${account}" '.cooldowns[$account].until_epoch // 0' "${CODEX_POOL_FILE}")"
+    if [[ "${cooldown_until}" =~ ^[0-9]+$ ]] && (( cooldown_until > now_epoch )); then
+      continue
+    fi
+    info="$(account_rotation_score "${account}" "${now_epoch}")"
+    score="${info%%|*}"
+    has_data="$(cut -d'|' -f2 <<< "${info}")"
+
+    if [[ -z "${best_account}" ]]; then
+      best_account="${account}"
+      best_score="${score}"
+      best_has_data="${has_data}"
+      continue
+    fi
+
+    if (( has_data > best_has_data )); then
+      best_account="${account}"
+      best_score="${score}"
+      best_has_data="${has_data}"
+      continue
+    fi
+    if (( has_data == best_has_data )) && (( score < best_score )); then
+      best_account="${account}"
+      best_score="${score}"
+      best_has_data="${has_data}"
+    fi
+  done
+
+  [[ -n "${best_account}" ]] || return 1
+  echo "${best_account}"
+}
+
+render_account_limit_brief() {
+  local account="$1"
+  local now_epoch="$2"
+  local p_used=""
+  local p_reset=""
+  local s_used=""
+  local s_reset=""
+  p_used="$(jq -r --arg account "${account}" '.accounts[$account].primary.used_percent // empty' "${CODEX_LIMITS_FILE}")"
+  p_reset="$(jq -r --arg account "${account}" '.accounts[$account].primary.resets_at // empty' "${CODEX_LIMITS_FILE}")"
+  s_used="$(jq -r --arg account "${account}" '.accounts[$account].secondary.used_percent // empty' "${CODEX_LIMITS_FILE}")"
+  s_reset="$(jq -r --arg account "${account}" '.accounts[$account].secondary.resets_at // empty' "${CODEX_LIMITS_FILE}")"
+  echo "$(render_limit_line "5h" "${p_used}" "${p_reset}" "${now_epoch}")"
+  echo "$(render_limit_line "7d" "${s_used}" "${s_reset}" "${now_epoch}")"
+}
+
+render_account_status_card() {
+  local account="$1"
+  local active_account="$2"
+  local now_epoch="$3"
+  local snapshot=""
+  local captured_at=""
+  local source=""
+  local plan_type=""
+  local primary_used=""
+  local primary_reset=""
+  local secondary_used=""
+  local secondary_reset=""
+  local cooldown_until=0
+  local cooldown_active=0
+  local captured_epoch=""
+  local age_seconds=""
+  local freshness_plain=""
+  local freshness_view=""
+  local state_badge_plain=""
+  local state_badge_view=""
+  local active_badge="-"
+  local ready_badge="R"
+  local p_cell=""
+  local s_cell=""
+  local plan_short=""
+  local source_short=""
+  local line_state=""
+  local cooldown_cell="-"
+  local source_cell="na"
+  local left_cell=""
+
+  snapshot="$(jq -rc --arg account "${account}" '.accounts[$account] // empty' "${CODEX_LIMITS_FILE}" || true)"
+  captured_at="$(jq -r --arg account "${account}" '.accounts[$account].captured_at // empty' "${CODEX_LIMITS_FILE}")"
+  source="$(jq -r --arg account "${account}" '.accounts[$account].source // empty' "${CODEX_LIMITS_FILE}")"
+  plan_type="$(jq -r --arg account "${account}" '.accounts[$account].plan_type // empty' "${CODEX_LIMITS_FILE}")"
+  primary_used="$(jq -r --arg account "${account}" '.accounts[$account].primary.used_percent // empty' "${CODEX_LIMITS_FILE}")"
+  primary_reset="$(jq -r --arg account "${account}" '.accounts[$account].primary.resets_at // empty' "${CODEX_LIMITS_FILE}")"
+  secondary_used="$(jq -r --arg account "${account}" '.accounts[$account].secondary.used_percent // empty' "${CODEX_LIMITS_FILE}")"
+  secondary_reset="$(jq -r --arg account "${account}" '.accounts[$account].secondary.resets_at // empty' "${CODEX_LIMITS_FILE}")"
+  cooldown_until="$(jq -r --arg account "${account}" '.cooldowns[$account].until_epoch // 0' "${CODEX_POOL_FILE}")"
+
+  if [[ "${cooldown_until}" =~ ^[0-9]+$ ]] && (( cooldown_until > now_epoch )); then
+    cooldown_active=1
+    cooldown_cell="+$(format_duration "$((cooldown_until - now_epoch))")"
+    ready_badge="C"
+  fi
+
+  if [[ "${account}" == "${active_account}" ]]; then
+    active_badge="A"
+  fi
+
+  state_badge_plain="${active_badge}${ready_badge}"
+  line_state="${state_badge_plain}"
+  if [[ "${cooldown_active}" -eq 1 ]]; then
+    state_badge_view="$(colorize "33" "${line_state}")"
+  else
+    state_badge_view="$(colorize "32" "${line_state}")"
+  fi
+
+  p_cell="$(render_limit_compact "${primary_used}" "${primary_reset}" "${now_epoch}")"
+  s_cell="$(render_limit_compact "${secondary_used}" "${secondary_reset}" "${now_epoch}")"
+  plan_short="${plan_type:-na}"
+  case "${source}" in
+    chatgpt-app-server) source_short="app" ;;
+    chatgpt-session) source_short="sess" ;;
+    "") source_short="na" ;;
+    *) source_short="other" ;;
+  esac
+  source_cell="${source_short}"
+
+  if [[ -z "${snapshot}" ]]; then
+    freshness_plain="no-data"
+    freshness_view="$(colorize "33" "${freshness_plain}")"
+  else
+    captured_epoch="$(iso_to_epoch "${captured_at}")"
+    if [[ -n "${captured_epoch}" && "${captured_epoch}" =~ ^[0-9]+$ ]]; then
+      age_seconds=$((now_epoch - captured_epoch))
+      freshness_plain="$(format_duration "${age_seconds}")"
+      if (( age_seconds > STATUS_STALE_SECONDS )); then
+        freshness_view="$(colorize "33" "${freshness_plain}")"
+      else
+        freshness_view="$(colorize "32" "${freshness_plain}")"
+      fi
+    else
+      freshness_plain="unknown"
+      freshness_view="$(colorize "33" "${freshness_plain}")"
+    fi
+  fi
+
+  left_cell="${state_badge_view} ${account}"
+  printf '%-22s  %-34s  %-34s  %-5s  %-8s  %-5s  %-8s\n' \
+    "${left_cell}" \
+    "${p_cell}" \
+    "${s_cell}" \
+    "${plan_short}" \
+    "${freshness_view}" \
+    "${source_cell}" \
+    "${cooldown_cell}"
+}
+
+show_status() {
+  local force_refresh=0
+  local unsafe_refresh=0
+  local arg
+  local active_account
+  local best_account=""
+  local accounts=()
+  local account
+  local now_epoch
+  local healthy=0
+  local cooling=0
+  local maybe_proxy="inactive"
+
+  while (( $# )); do
+    arg="$1"
+    shift
+    case "${arg}" in
+      --refresh|--refresh-all)
+        force_refresh=1
+        ;;
+      --unsafe)
+        unsafe_refresh=1
+        ;;
+      *)
+        fail "Unknown argument for 'status': ${arg}"
+        ;;
+    esac
+  done
+
+  ensure_codex_pool_file
+  ensure_codex_limits_file
+  refresh_active_account_limits_from_latest_session >/dev/null 2>&1 || true
+
+  while IFS= read -r account; do
+    [[ -z "${account}" ]] || accounts+=("${account}")
+  done < <(pool_list_accounts)
+
+  if [[ "${#accounts[@]}" -eq 0 ]]; then
+    fail "Codex pool is empty. Configure with: ai pool-set <account> [account...]"
+  fi
+
+  refresh_codex_limits_cache_for_accounts "${force_refresh}" "${unsafe_refresh}" "${accounts[@]}" || true
+
+  now_epoch="$(date +%s)"
+  active_account="$(active_account_for_platform codex)"
+
+  for account in "${accounts[@]}"; do
+    if jq -e --arg account "${account}" --arg now "${now_epoch}" '(.cooldowns[$account].until_epoch // 0) > ($now | tonumber)' "${CODEX_POOL_FILE}" >/dev/null 2>&1; then
+      cooling=$((cooling + 1))
+    else
+      healthy=$((healthy + 1))
+    fi
+  done
+
+  if seamless_proxy_ready; then
+    maybe_proxy="active"
+  fi
+
+  best_account="$(select_best_ready_account "${now_epoch}" "${accounts[@]}" || true)"
+
+  local py_script
+  py_script=$(cat <<'EOF'
+import json
+import sys
+import time
+import re
+import shutil
+import math
+
+def colorize(code, text):
+    if not sys.stdout.isatty():
+        return text
+    # Support multiple codes separated by semicolon
+    return f"\033[{code}m{text}\033[0m"
+
+def format_duration(seconds):
+    if seconds <= 0: return "now"
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    if days > 0: return f"{days}d{hours}h"
+    if hours > 0: return f"{hours}h{minutes}m"
+    if minutes > 0: return f"{minutes}m"
+    return f"{secs}s"
+
+def get_style_code(pct):
+    if pct >= 90: return "31" # Red
+    if pct >= 75: return "33" # Yellow
+    return "32" # Green
+
+def smooth_bar(pct, width=20):
+    blocks = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"]
+    if pct < 0: pct = 0
+    if pct > 100: pct = 100
+    
+    total_eighths = int(round((pct / 100.0) * width * 8))
+    full_blocks = total_eighths // 8
+    remainder = total_eighths % 8
+    
+    bar = "█" * full_blocks
+    if full_blocks < width:
+        bar += blocks[remainder]
+        bar += " " * (width - full_blocks - 1)
+        
+    return bar
+
+def visible_len(text):
+    return len(re.sub(r'\x1b\[[0-9;]*m', '', str(text)))
+
+def pad_right(text, width):
+    v_len = visible_len(text)
+    padding = max(0, width - v_len)
+    return str(text) + " " * padding
+
+def pad_left(text, width):
+    v_len = visible_len(text)
+    padding = max(0, width - v_len)
+    return " " * padding + str(text)
+
+def pad_center(text, width):
+    v_len = visible_len(text)
+    padding = max(0, width - v_len)
+    left_pad = padding // 2
+    right_pad = padding - left_pad
+    return " " * left_pad + str(text) + " " * right_pad
+
+def main():
+    import base64
+    import os
+    try:
+        with open(sys.argv[1]) as f:
+            pool_data = json.load(f)
+    except Exception:
+        pool_data = {"accounts": [], "cooldowns": {}}
+    
+    try:
+        with open(sys.argv[2]) as f:
+            limits_data = json.load(f)
+    except Exception:
+        limits_data = {"accounts": {}}
+        
+    accounts = sys.argv[3].split(",") if sys.argv[3] else []
+    active_account = sys.argv[4]
+    best_account = sys.argv[5]
+    maybe_proxy = sys.argv[6]
+    stale_seconds = int(sys.argv[7])
+    env_account = sys.argv[8] if len(sys.argv) > 8 else "none"
+    store_dir = sys.argv[9] if len(sys.argv) > 9 else ""
+    last_event = sys.argv[10] if len(sys.argv) > 10 else "None"
+    total_sessions = sys.argv[11] if len(sys.argv) > 11 else "0"
+    
+    # Subscription info cache
+    subs = {}
+    for acc in accounts:
+        try:
+            with open(f"{store_dir}/{acc}.json") as f:
+                c_data = json.load(f)
+                id_t = c_data.get("tokens", {}).get("id_token")
+                if id_t:
+                    parts = id_t.split(".")
+                    if len(parts) > 1:
+                        payload = parts[1]
+                        payload = payload.replace("-", "+").replace("_", "/")
+                        payload += "=" * ((4 - len(payload) % 4) % 4)
+                        claims = json.loads(base64.b64decode(payload))
+                        def find_expiry(obj):
+                            if isinstance(obj, dict):
+                                if "chatgpt_subscription_active_until" in obj:
+                                    return obj["chatgpt_subscription_active_until"]
+                                for v in obj.values():
+                                    res = find_expiry(v)
+                                    if res: return res
+                            return None
+                        expiry = find_expiry(claims)
+                        if expiry:
+                            subs[acc] = expiry.split("T")[0]
+        except: pass
+    
+    now = int(time.time())
+    term_width = shutil.get_terminal_size((100, 20)).columns
+    
+    healthy, cooling = 0, 0
+    table_rows = []
+    compat_rows = []
+    sum_p_used, count_p_used = 0, 0
+    sum_s_used, count_s_used = 0, 0
+    
+    def safe_get(obj, *keys, default=None):
+        for key in keys:
+            if not isinstance(obj, dict): return default
+            obj = obj.get(key)
+            if obj is None: return default
+        return obj
+
+    bar_width = 15
+    if term_width > 120: bar_width = 25
+    elif term_width < 95: bar_width = 10
+        
+    for acc in accounts:
+        is_active = (acc == active_account)
+        cooldown = safe_get(pool_data, "cooldowns", acc, "until_epoch", default=0)
+        cooldown_active = False
+            
+        if int(cooldown or 0) > now:
+            cooling += 1
+            cooldown_active = True
+            cd_val = int(cooldown) - now
+            cooldown_cell = colorize("1;31" if cd_val > 3600 else "1;33", f"⏳ {format_duration(cd_val)}")
+            ready_badge = "COOL"
+            st_color = "41;37" if is_active else "33"
+        else:
+            healthy += 1
+            cooldown_cell = colorize("90", "✔ ready")
+            ready_badge = "RDY "
+            st_color = "42;37" if is_active else "32"
+            
+        active_badge = "▶ " if is_active else "  "
+        state_badge_view = colorize(st_color, f"{active_badge}{ready_badge}")
+        
+        acc_data = safe_get(limits_data, "accounts", acc, default={})
+
+        def make_cell(data_type):
+            val = safe_get(acc_data, data_type, "used_percent")
+            reset = safe_get(acc_data, data_type, "resets_at")
+            if val is not None and reset is not None:
+                try: 
+                    v, r = float(val), int(reset)
+                    bar = smooth_bar(v, bar_width)
+                    style = get_style_code(v)
+                    colored_bar = colorize(style, bar).replace(" ", colorize("90", "·"))
+                    return f"[{colored_bar}] {colorize(style, f'{int(v):>3}%')} {colorize('90', '↻')}{colorize('36', f'{format_duration(max(0, r-now)):>5}')}", v
+                except: pass
+            return colorize("90", f"[{'·'*bar_width}]  --% ↻   --"), None
+
+        p_cell, p_val = make_cell("primary")
+        if p_val is not None: sum_p_used += p_val; count_p_used += 1
+        s_cell, s_val = make_cell("secondary")
+        if s_val is not None: sum_s_used += s_val; count_s_used += 1
+            
+        plan_cell = colorize("35", (acc_data.get("plan_type") or "na").upper())
+        renewal_date = subs.get(acc, "---")
+        renewal_cell = colorize("36", f"🗓 {renewal_date}") if renewal_date != "---" else colorize("90", "---")
+        
+        captured_at = acc_data.get("captured_at")
+        if captured_at:
+            try:
+                import calendar
+                t_tuple = time.strptime(captured_at.replace("Z", "GMT"), "%Y-%m-%dT%H:%M:%S%Z")
+                age = now - calendar.timegm(t_tuple)
+                age_cell = colorize("31" if age > stale_seconds * 2 else "33" if age > stale_seconds else "32", format_duration(age))
+            except: age_cell = colorize("33", "???")
+        else: age_cell = colorize("90", "---")
+            
+        acc_display = colorize("1;36" if is_active else "1;37", pad_right(acc, 18))
+        if is_active: acc_display = colorize("4", acc_display)
+            
+        table_rows.append([state_badge_view, acc_display, p_cell, s_cell, plan_cell, renewal_cell, age_cell, colorize("90", "APP" if acc_data.get("source") == "chatgpt-app-server" else "SESS"), cooldown_cell])
+        compat_prefix = "AR" if is_active else ("-C" if cooldown_active else "--")
+        compat_p = int(p_val) if p_val is not None else 0
+        compat_s = int(s_val) if s_val is not None else 0
+        compat_p_bar = "#" * max(1, min(10, compat_p // 10 if compat_p > 0 else 1))
+        compat_s_bar = "#" * max(1, min(10, compat_s // 10 if compat_s > 0 else 1))
+        compat_rows.append(f"{compat_prefix} {acc} [#{compat_p_bar}] 5h {compat_p}% [#{compat_s_bar}] weekly {compat_s}%")
+
+    headers = ["STATE", "ACCOUNT ID", "5H PRIMARY LIMIT (USAGE / RESET)", "7D SECONDARY LIMIT (USAGE / RESET)", "PLAN", "RENEWAL", "AGE", "SRC", "STATUS"]
+    col_widths = [6, 18, bar_width + 17, bar_width + 17, 4, 12, 5, 4, 8]
+    box_width = sum(col_widths) + len(col_widths)*3 - 1
+    
+    avg_p = sum_p_used / count_p_used if count_p_used > 0 else 0
+    avg_s = sum_s_used / count_s_used if count_s_used > 0 else 0
+    health_score = max(0, min(100, (100 - avg_p) - (cooling * 10)))
+    h_color = "1;32" if health_score > 70 else "1;33" if health_score > 40 else "1;31"
+    h_icon = "🟢" if health_score > 70 else "🟡" if health_score > 40 else "🔴"
+    
+    # Strip whitespace to ensure 100% reliable sync matching
+    sync_match = (env_account.strip() == active_account.strip())
+
+    # Backward-compatible plain markers for scripts/tests that parse legacy output.
+    print(f"AI STATUS {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(now))}")
+    print("ST ACCOUNT")
+    for row in compat_rows:
+        print(row)
+    
+    print(colorize("1;34", "╭" + "─"*box_width + "╮"))
+    title = f" 🤖 AI SWITCH COMMAND CENTER "
+    sys_stats = f" UPTIME: Active │ SESSIONS: {total_sessions} │ WATCH: {'ON' if last_event != 'None' else 'OFF'} "
+    health = f" HEALTH: {h_icon} {colorize(h_color, f'{health_score:.0f}%')} "
+    print(colorize("1;34", "│") + title + sys_stats + " " * max(0, box_width - visible_len(title + sys_stats + health)) + health + colorize("1;34", "│"))
+    print(colorize("1;34", "├" + "─"*box_width + "┤"))
+    
+    # Global Infrastructure Card
+    summary_title = colorize("1;37;44", " 🌐 GLOBAL INFRASTRUCTURE CAPACITY ")
+    print(colorize("1;34", "│") + " " * ((box_width - visible_len(summary_title)) // 2) + summary_title + " " * (box_width - visible_len(summary_title) - (box_width - visible_len(summary_title)) // 2) + colorize("1;34", "│"))
+    
+    def summary_line(label, val, color="1;32"):
+        l = f"  {label}:"
+        v = f"{val}  "
+        return colorize("1;34", "│") + colorize("37", l) + " " * (box_width - len(l) - len(v)) + colorize(color, v) + colorize("1;34", "│")
+
+    print(summary_line("Total Resource Pool", f"{len(accounts)} accounts"))
+    print(summary_line("Operational Nodes", f"{healthy} ready / {cooling} cooling", "1;32" if cooling == 0 else "1;33"))
+    print(summary_line("Active Node ID", active_account, "1;36"))
+    
+    avail_p_nodes = ((100-avg_p)*count_p_used/100.0)
+    avail_s_nodes = ((100-avg_s)*count_s_used/100.0)
+    print(summary_line("Current Availability", f"{avail_p_nodes:.1f}x 5H Units / {avail_s_nodes:.1f}x 7D Units", "1;32"))
+    
+    sync_status = colorize("1;32", "🟢 OPERATIONAL") if sync_match else colorize("1;33", "🟡 PENDING RESTART (Run: source ~/.bashrc)")
+    print(colorize("1;34", "│") + colorize("37", "  Shell Sync Status:") + " " * (box_width - 21 - visible_len(sync_status)) + sync_status + "  " + colorize("1;34", "│"))
+    
+    print(colorize("1;34", "├" + "─"*box_width + "┤"))
+    h_row = colorize("1;34", "│ ")
+    for i, h in enumerate(headers):
+        h_row += colorize("1;30;47", pad_center(h, col_widths[i]))
+        if i < len(headers) - 1: h_row += colorize("1;34", " │ ")
+    print(h_row + colorize("1;34", " │"))
+    print(colorize("1;34", "├" + "─"*box_width + "┤"))
+    
+    for row in table_rows:
+        r_line = colorize("1;34", "│ ")
+        for i, val in enumerate(row):
+            r_line += pad_right(val, col_widths[i])
+            if i < len(row) - 1: r_line += colorize("90", " │ ")
+        print(r_line + colorize("1;34", " │"))
+
+    # COMBINED POOL TOTAL ROW (Final Production Polish)
+    print(colorize("1;34", "├" + "─"*box_width + "┤"))
+    t_bar_p = smooth_bar(avg_p, bar_width)
+    t_bar_s = smooth_bar(avg_s, bar_width)
+    t_cell_p = f"[{colorize(get_style_code(avg_p), t_bar_p).replace(' ', colorize('90', '·'))}] {colorize(get_style_code(avg_p), f'{int(avg_p):>3}%')} {colorize('90', 'AVG')}"
+    t_cell_s = f"[{colorize(get_style_code(avg_s), t_bar_s).replace(' ', colorize('90', '·'))}] {colorize(get_style_code(avg_s), f'{int(avg_s):>3}%')} {colorize('90', 'AVG')}"
+    
+    r_line = colorize("1;34", "│ ")
+    r_line += pad_right(colorize("1;37", " POOL "), col_widths[0]) + colorize("90", " │ ")
+    r_line += pad_right(colorize("1;37", "AGGREGATE TOTALS"), col_widths[1]) + colorize("90", " │ ")
+    r_line += pad_right(t_cell_p, col_widths[2]) + colorize("90", " │ ")
+    r_line += pad_right(t_cell_s, col_widths[3]) + colorize("90", " │ ")
+    
+    # Merge remaining columns into a beautiful status block
+    merged_width = sum(col_widths[4:]) + (len(col_widths[4:]) - 1) * 3
+    if healthy == len(accounts):
+        pool_status_msg = colorize("1;32;4", " ALL NODES OPERATIONAL ")
+    elif healthy > 0:
+        pool_status_msg = colorize("1;32", f" {healthy} READY / {cooling} COOLING ")
+    else:
+        pool_status_msg = colorize("1;31;5", " CRITICAL: POOL EXHAUSTED ")
+        
+    r_line += pad_center(pool_status_msg, merged_width) + colorize("1;34", " │")
+    print(r_line)
+
+    if not sync_match:
+        print(colorize("1;34", "├" + "─"*box_width + "┤"))
+        # High-intensity warning for sync drift
+        err_prefix = colorize("1;31;5", " ⚠ SYNC DRIFT DETECTED: ")
+        err_msg = f"Your shell environment is outdated. Run: {colorize('1;30;43', ' source ~/.bashrc ')} to re-sync now."
+        print(colorize("1;34", "│") + " " + err_prefix + err_msg + " " * (box_width - visible_len(err_prefix) - visible_len(err_msg) - 1) + colorize("1;34", "│"))
+    
+    print(colorize("1;34", "├" + "─"*box_width + "┤"))
+    event_str = f"  {colorize('1;37', 'LAST OPERATION:')} {last_event[:box_width-20]}"
+    print(colorize("1;34", "│") + event_str + " " * (box_width - visible_len(event_str)) + colorize("1;34", "│"))
+    print(colorize("1;34", "╰" + "─"*box_width + "╯"))
+
+if __name__ == "__main__":
+    main()
+EOF
+)
+
+  local watch_log="${AI_SWITCH_HOME}/watch.log"
+  local last_event="None"
+  if [[ -f "${watch_log}" ]]; then
+    last_event=$(tail -n 1 "${watch_log}" | cut -d']' -f2- | sed 's/^[[:space:]]*//')
+  fi
+  local total_sessions
+  # Avoid set -e/pipefail abort when no log files exist yet.
+  total_sessions=$(find "${CODEX_LOG_DIR}" -maxdepth 1 -type f -name '*.log' 2>/dev/null | wc -l | tr -d ' ')
+
+  python3 -c "${py_script}" "${CODEX_POOL_FILE}" "${CODEX_LIMITS_FILE}" "$(IFS=,; echo "${accounts[*]}")" "${active_account}" "${best_account}" "${maybe_proxy}" "${STATUS_STALE_SECONDS}" "${AI_SHELL_VAL}" "${STORE_DIR}" "${last_event}" "${total_sessions}"
+}
+
+rotate_best_account() {
+  local do_refresh=1
+  local unsafe_refresh=0
+  local arg
+  local accounts=()
+  local account
+  local now_epoch
+  local active_account
+  local best_account=""
+  local did_any=0
+  local reconcile_out=""
+
+  while (( $# )); do
+    arg="$1"
+    shift
+    case "${arg}" in
+      --refresh)
+        do_refresh=1
+        ;;
+      --no-refresh)
+        do_refresh=0
+        ;;
+      --unsafe)
+        unsafe_refresh=1
+        ;;
+      *)
+        fail "Unknown argument for 'rotate': ${arg}"
+        ;;
+    esac
+  done
+
+  ensure_codex_pool_file
+  ensure_codex_limits_file
+  refresh_active_account_limits_from_latest_session >/dev/null 2>&1 || true
+  reconcile_out="$(pool_reconcile_saved_accounts 2>/dev/null || true)"
+  if [[ -n "${reconcile_out}" ]]; then
+    echo "${reconcile_out}"
+  fi
+
+  while IFS= read -r account; do
+    [[ -z "${account}" ]] || accounts+=("${account}")
+  done < <(pool_list_accounts)
+  [[ "${#accounts[@]}" -gt 0 ]] || fail "Codex pool is empty. Configure with: ai pool-set <account> [account...]"
+
+  if [[ "${do_refresh}" -eq 1 ]]; then
+    refresh_codex_limits_cache_for_accounts 1 "${unsafe_refresh}" "${accounts[@]}" || true
+  fi
+
+  now_epoch="$(date +%s)"
+  active_account="$(active_account_for_platform codex)"
+  best_account="$(select_best_ready_account "${now_epoch}" "${accounts[@]}" || true)"
+  [[ -n "${best_account}" ]] || fail "No ready account available. All pool accounts are cooling down."
+
+  if [[ "${best_account}" == "${active_account}" ]]; then
+    pool_mark_selected "${best_account}"
+    echo "Codex already on the most available ready account: ${best_account}"
+    if platform_available opencode; then
+      use_account_platform opencode "${best_account}" >/dev/null 2>&1 || true
+    fi
+    while IFS= read -r line; do
+      echo "  ${line}"
+    done < <(render_account_limit_brief "${best_account}" "${now_epoch}")
+    return 0
+  fi
+
+  if platform_available codex; then
+    use_account_platform codex "${best_account}" >/dev/null
+    did_any=1
+  fi
+  if platform_available opencode; then
+    use_account_platform opencode "${best_account}" >/dev/null 2>&1 || true
+    did_any=1
+  fi
+  if [[ "${did_any}" -eq 0 ]]; then
+    fail "No supported platform auth file found to apply rotated account."
+  fi
+  pool_mark_selected "${best_account}"
+  echo "Rotated Codex account: ${active_account} -> ${best_account}"
+  while IFS= read -r line; do
+    echo "  ${line}"
+  done < <(render_account_limit_brief "${best_account}" "${now_epoch}")
+
+  if codex_process_running; then
+    warn "Running Codex processes keep their current in-memory session. New turns/sessions pick up '${best_account}'."
+  fi
+}
+
+require_codex_file_auth() {
+  if [[ ! -f "${CODEX_AUTH_FILE}" ]]; then
+    fail "Codex auth file not found at ${CODEX_AUTH_FILE}. Use file-based auth storage (cli_auth_credentials_store = \"file\") and sign in first."
+  fi
+}
+
+is_managed_codex_supported_args() {
+  local args=("$@")
+  local arg
+  local consumed_value=0
+
+  for arg in "${args[@]}"; do
+    if [[ "${consumed_value}" -eq 1 ]]; then
+      consumed_value=0
+      continue
+    fi
+
+    case "${arg}" in
+      exec|review|login|logout|mcp|mcp-server|app-server|completion|sandbox|debug|apply|fork|cloud|features|help)
+        return 1
+        ;;
+      -c|--config|--enable|--disable|--remote|--remote-auth-token-env|-i|--image|-m|--model|--local-provider|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|--add-dir)
+        consumed_value=1
+        ;;
+      --config=*|--enable=*|--disable=*|--remote=*|--remote-auth-token-env=*|--image=*|--model=*|--local-provider=*|--profile=*|--sandbox=*|--ask-for-approval=*|--cd=*|--add-dir=*)
+        ;;
+      --oss|--full-auto|--dangerously-bypass-approvals-and-sandbox|--search|--no-alt-screen|--last|--all|--include-non-interactive)
+        ;;
+      --)
+        return 0
+        ;;
+      -*)
+        ;;
+      *)
+        if [[ "${arg}" == "resume" ]]; then
+          return 0
+        fi
+        return 0
+        ;;
+    esac
+  done
+
+  return 0
+}
+
+extract_resume_global_args() {
+  local args=("$@")
+  local arg
+  local out=()
+  local consumed_value=0
+
+  for arg in "${args[@]}"; do
+    if [[ "${consumed_value}" -eq 1 ]]; then
+      out+=("${arg}")
+      consumed_value=0
+      continue
+    fi
+
+    case "${arg}" in
+      -c|--config|--enable|--disable|--remote|--remote-auth-token-env|-i|--image|-m|--model|--local-provider|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|--add-dir)
+        out+=("${arg}")
+        consumed_value=1
+        ;;
+      --config=*|--enable=*|--disable=*|--remote=*|--remote-auth-token-env=*|--image=*|--model=*|--local-provider=*|--profile=*|--sandbox=*|--ask-for-approval=*|--cd=*|--add-dir=*)
+        out+=("${arg}")
+        ;;
+      --oss|--full-auto|--dangerously-bypass-approvals-and-sandbox|--search|--no-alt-screen|--yolo)
+        out+=("${arg}")
+        ;;
+      resume)
+        break
+        ;;
+      -*)
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  printf '%s\n' "${out[@]}"
+}
+
+extract_resume_target() {
+  local args=("$@")
+  local idx=0
+  local arg
+
+  while [[ "${idx}" -lt "${#args[@]}" ]]; do
+    arg="${args[${idx}]}"
+    case "${arg}" in
+      -c|--config|--enable|--disable|--remote|--remote-auth-token-env|-i|--image|-m|--model|--local-provider|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|--add-dir)
+        idx=$((idx + 2))
+        continue
+        ;;
+      --config=*|--enable=*|--disable=*|--remote=*|--remote-auth-token-env=*|--image=*|--model=*|--local-provider=*|--profile=*|--sandbox=*|--ask-for-approval=*|--cd=*|--add-dir=*|--oss|--full-auto|--dangerously-bypass-approvals-and-sandbox|--search|--no-alt-screen)
+        idx=$((idx + 1))
+        continue
+        ;;
+      resume)
+        idx=$((idx + 1))
+        while [[ "${idx}" -lt "${#args[@]}" ]]; do
+          arg="${args[${idx}]}"
+          case "${arg}" in
+            --last)
+              echo "__LAST__"
+              return 0
+              ;;
+            --all|--include-non-interactive)
+              idx=$((idx + 1))
+              ;;
+            -*)
+              idx=$((idx + 1))
+              ;;
+            *)
+              echo "${arg}"
+              return 0
+              ;;
+          esac
+        done
+        return 0
+        ;;
+      *)
+        return 0
+        ;;
+    esac
+  done
+}
+
+extract_session_id_from_file() {
+  local file="$1"
+  local id=""
+  [[ -f "${file}" ]] || return 1
+  id="$(jq -r 'select(.type == "session_meta") | .payload.id // empty' "${file}" | head -n 1)"
+  [[ -n "${id}" ]] || return 1
+  echo "${id}"
+}
+
+detect_recent_session_file() {
+  local newer_than="$1"
+  local cwd_filter="$2"
+  local preferred_session_id="${3:-}"
+  local candidate=""
+  local first_matching_cwd=""
+  local first_matching_session=""
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+
+    if [[ -n "${newer_than}" && ! "${candidate}" -nt "${newer_than}" ]]; then
+      continue
+    fi
+
+    if [[ -n "${preferred_session_id}" ]] && jq -e --arg id "${preferred_session_id}" '
+      select(.type == "session_meta" and .payload.id == $id)
+    ' "${candidate}" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return 0
+    fi
+
+    if session_file_matches_cwd "${candidate}" "${cwd_filter}"; then
+      echo "${candidate}"
+      return 0
+    fi
+  done < <(list_session_files_newest)
+
+  if [[ -n "${preferred_session_id}" ]]; then
+    first_matching_session="$(find_session_file_by_id "${preferred_session_id}" || true)"
+    if [[ -n "${first_matching_session}" ]]; then
+      echo "${first_matching_session}"
+      return 0
+    fi
+  fi
+
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+    if session_file_matches_cwd "${candidate}" "${cwd_filter}"; then
+      first_matching_cwd="${candidate}"
+      break
+    fi
+  done < <(list_session_files_newest)
+
+  if [[ -n "${first_matching_cwd}" ]]; then
+    echo "${first_matching_cwd}"
+    return 0
+  fi
+
+  return 1
+}
+
+detect_recent_session_id() {
+  local newer_than="$1"
+  local cwd_filter="$2"
+  local file=""
+  file="$(detect_recent_session_file "${newer_than}" "${cwd_filter}" || true)"
+  [[ -n "${file}" ]] || return 1
+  extract_session_id_from_file "${file}"
+}
+
+resolve_last_session_file() {
+  local file=""
+  file="$(list_session_files_newest | head -n 1)"
+  [[ -n "${file}" ]] || return 1
+  echo "${file}"
+}
+
+resolve_last_session_id() {
+  local file=""
+  file="$(resolve_last_session_file || true)"
+  [[ -n "${file}" ]] || return 1
+  extract_session_id_from_file "${file}"
+}
+
+find_session_file_by_id() {
+  local session_id="$1"
+  local candidate=""
+  [[ -n "${session_id}" ]] || return 1
+  while IFS= read -r candidate; do
+    [[ -n "${candidate}" ]] || continue
+    if jq -e --arg id "${session_id}" '
+      select(.type == "session_meta" and .payload.id == $id)
+    ' "${candidate}" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return 0
+    fi
+  done < <(list_session_files_newest)
+  return 1
+}
+
+extract_rate_limits_event_from_session_file() {
+  local session_file="$1"
+  [[ -f "${session_file}" ]] || return 1
+  jq -rc '
+    select(.type == "event_msg" and .payload.type == "token_count" and .payload.rate_limits != null)
+    | {
+        captured_at: (.timestamp // null),
+        rate_limits: .payload.rate_limits
+      }
+  ' "${session_file}" | tail -n 1
+}
+
+cache_account_rate_limits() {
+  local account="$1"
+  local source="$2"
+  local session_id="$3"
+  local event_json="$4"
+  local tmp
+
+  [[ -n "${account}" && -n "${event_json}" ]] || return 1
+  ensure_codex_limits_file
+  tmp="$(new_tmp)"
+  jq \
+    --arg account "${account}" \
+    --arg updated_at "$(now_utc)" \
+    --arg source "${source}" \
+    --arg session_id "${session_id}" \
+    --argjson event "${event_json}" '
+    .accounts = (.accounts // {})
+    | .accounts[$account] = {
+        captured_at: ($event.captured_at // $updated_at),
+        source: $source,
+        session_id: (if $session_id == "" then null else $session_id end),
+        limit_id: ($event.rate_limits.limit_id // null),
+        plan_type: ($event.rate_limits.plan_type // null),
+        primary: ($event.rate_limits.primary // null),
+        secondary: ($event.rate_limits.secondary // null),
+        credits: ($event.rate_limits.credits // null)
+      }
+    | .updated_at = $updated_at
+  ' "${CODEX_LIMITS_FILE}" > "${tmp}"
+  mv "${tmp}" "${CODEX_LIMITS_FILE}"
+  chmod 600 "${CODEX_LIMITS_FILE}" || true
+}
+
+cache_rate_limits_from_session_file() {
+  local account="$1"
+  local session_file="$2"
+  local source="$3"
+  local session_id="$4"
+  local event_json=""
+
+  [[ -n "${account}" && -f "${session_file}" ]] || return 1
+  event_json="$(extract_rate_limits_event_from_session_file "${session_file}" || true)"
+  [[ -n "${event_json}" ]] || return 1
+  cache_account_rate_limits "${account}" "${source}" "${session_id}" "${event_json}"
+}
+
+refresh_active_account_limits_from_latest_session() {
+  local active_account=""
+  local latest_file=""
+  local session_id=""
+
+  active_account="$(active_account_for_platform codex)"
+  case "${active_account}" in
+    ""|unknown|not\ configured) return 1 ;;
+  esac
+
+  latest_file="$(resolve_last_session_file || true)"
+  [[ -n "${latest_file}" ]] || return 1
+  session_id="$(extract_session_id_from_file "${latest_file}" || true)"
+  cache_rate_limits_from_session_file "${active_account}" "${latest_file}" "chatgpt-session" "${session_id}"
+}
+
+detect_session_id_from_log() {
+  local log_file="$1"
+  local id=""
+  [[ -f "${log_file}" ]] || return 1
+  id="$(
+    sanitize_codex_log_tail "${log_file}" \
+      | grep -Eo 'codex resume [A-Za-z0-9-]+' \
+      | awk '{print $3}' \
+      | tail -n 1
+  )"
+  [[ -n "${id}" ]] || return 1
+  echo "${id}"
+}
+
+codex_log_has_rate_limit() {
+  local log_file="$1"
+  [[ -f "${log_file}" ]] || return 1
+  sanitize_codex_log_tail "${log_file}" | grep -Eiq \
+    "You've hit your usage limit|rate limit exceeded|429 Too Many Requests|too many requests|Limits reset every|try again in [0-9]|try again at [A-Za-z0-9]"
+}
+
+sanitize_codex_log_tail() {
+  local log_file="$1"
+  [[ -f "${log_file}" ]] || return 0
+  tail -n 800 "${log_file}" \
+    | tr -d '\r\000' \
+    | sed -E $'s/\x1B\\[[0-9;?]*[ -/]*[@-~]//g; s/\x1B\\][^\a]*(\a|\x1B\\\\)//g'
+}
+
+parse_rate_limit_cooldown_seconds() {
+  local log_file="$1"
+  local tail_text
+  local line
+  local absolute_line
+  local absolute_text
+  local parsed_absolute_epoch
+  local now_epoch
+  local days=0
+  local hours=0
+  local minutes=0
+  local total=0
+
+  tail_text="$(sanitize_codex_log_tail "${log_file}")"
+
+  line="$(printf '%s\n' "${tail_text}" | grep -Eio 'try again in [^[:cntrl:]]+' | tail -n 1 || true)"
+  if [[ -n "${line}" ]]; then
+    if [[ "${line}" =~ ([0-9]+)[[:space:]]+day ]]; then
+      days="${BASH_REMATCH[1]}"
+    fi
+    if [[ "${line}" =~ ([0-9]+)[[:space:]]+hour ]]; then
+      hours="${BASH_REMATCH[1]}"
+    fi
+    if [[ "${line}" =~ ([0-9]+)[[:space:]]+minute ]]; then
+      minutes="${BASH_REMATCH[1]}"
+    fi
+    total=$((days * 86400 + hours * 3600 + minutes * 60))
+    if [[ "${total}" -gt 0 ]]; then
+      echo "${total}"
+      return 0
+    fi
+  fi
+
+  absolute_line="$(printf '%s\n' "${tail_text}" | grep -Eio 'try again at [^[:cntrl:]]+' | tail -n 1 || true)"
+  if [[ -n "${absolute_line}" ]]; then
+    absolute_text="${absolute_line#try again at }"
+    absolute_text="${absolute_text%.}"
+    absolute_text="$(printf '%s' "${absolute_text}" | sed -E 's/([0-9]+)(st|nd|rd|th)/\1/g')"
+    if parsed_absolute_epoch="$(date -d "${absolute_text}" +%s 2>/dev/null)"; then
+      now_epoch="$(date +%s)"
+      if [[ "${parsed_absolute_epoch}" =~ ^[0-9]+$ ]] && (( parsed_absolute_epoch > now_epoch )); then
+        echo "$((parsed_absolute_epoch - now_epoch))"
+        return 0
+      fi
+    fi
+  fi
+
+  if printf '%s\n' "${tail_text}" | grep -Eiq '429 Too Many Requests|too many requests'; then
+    echo "${DEFAULT_HTTP_429_COOLDOWN_SECONDS}"
+    return 0
+  fi
+
+  echo "${DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS}"
+}
+
+run_codex_command() {
+  local log_file="$1"
+  shift
+  local exit_code
+
+  : > "${log_file}"
+
+  if [[ -t 0 && -t 1 ]] && command -v "${AI_SWITCH_SCRIPT_BIN}" >/dev/null 2>&1; then
+    set +e
+    "${AI_SWITCH_SCRIPT_BIN}" -q -f -c "$(printf '%q ' "$@")" "${log_file}"
+    exit_code=$?
+    set -e
+  else
+    set +e
+    "$@" 2>&1 | tee -a "${log_file}"
+    exit_code=${PIPESTATUS[0]}
+    set -e
+  fi
+
+  return "${exit_code}"
+}
+
+run_unmanaged_codex_passthrough() {
+  # Multica uses `codex app-server` rather than interactive `codex`.
+  # Managed rotation is not available for app-server sessions, but we can
+  # still make each new server start on the healthiest ready account.
+  if [[ "${1:-}" == "app-server" ]]; then
+    local rotate_mode="--no-refresh"
+    local limits_updated_at=""
+    local limits_updated_epoch=""
+
+    ensure_codex_limits_file
+    limits_updated_at="$(jq -r '.updated_at // empty' "${CODEX_LIMITS_FILE}" 2>/dev/null || true)"
+    if [[ -n "${limits_updated_at}" ]]; then
+      limits_updated_epoch="$(iso_to_epoch "${limits_updated_at}" || true)"
+    fi
+    if [[ -z "${limits_updated_epoch}" ]] || (( $(date +%s) - limits_updated_epoch >= STATUS_STALE_SECONDS )); then
+      rotate_mode="--refresh"
+    fi
+
+    rotate_best_account "${rotate_mode}" >/dev/null 2>&1 || true
+  fi
+  local cmd=("${AI_SWITCH_CODEX_BIN}" "$@")
+  exec "${cmd[@]}"
+}
+
+has_profile_arg() {
+  local args=("$@")
+  local idx=0
+  local arg
+  while [[ "${idx}" -lt "${#args[@]}" ]]; do
+    arg="${args[${idx}]}"
+    case "${arg}" in
+      -p|--profile)
+        return 0
+        ;;
+      --profile=*)
+        return 0
+        ;;
+    esac
+    idx=$((idx + 1))
+  done
+  return 1
+}
+
+seamless_proxy_ready() {
+  # Truly seamless mode uses request-level failover via local proxy.
+  # We auto-enable only when proxy key is present and health endpoint responds.
+  [[ -n "${CODEX_SEAMLESS_PROXY_KEY:-}" ]] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  curl -fsS --max-time 1 "http://127.0.0.1:8788/health" >/dev/null 2>&1
+}
+
+run_seamless_codex_passthrough() {
+  local original_args=("$@")
+  local cmd=("${AI_SWITCH_CODEX_BIN}")
+  if ! has_profile_arg "${original_args[@]}"; then
+    cmd+=(-p seamless)
+  fi
+  cmd+=("${original_args[@]}")
+  exec "${cmd[@]}"
+}
+
+doctor_check() {
+  local issues=0
+  local count
+
+  echo "AI switch doctor:"
+
+  if command -v ai >/dev/null 2>&1; then
+    echo "  ai command: ok ($(command -v ai))"
+  else
+    echo "  ai command: missing"
+    issues=$((issues + 1))
+  fi
+
+  if codex_wrapper_installed; then
+    echo "  codex wrapper: installed"
+  else
+    echo "  codex wrapper: not installed"
+    issues=$((issues + 1))
+  fi
+
+  if command -v bwrap >/dev/null 2>&1; then
+    echo "  bubblewrap: ok ($(command -v bwrap))"
+  else
+    echo "  bubblewrap: missing"
+    issues=$((issues + 1))
+  fi
+
+  if seamless_proxy_ready; then
+    echo "  seamless proxy mode: active (codex will use -p seamless)"
+  else
+    echo "  seamless proxy mode: inactive"
+  fi
+
+  if [[ -f "${CODEX_AUTH_FILE}" ]]; then
+    echo "  codex auth file: ok (${CODEX_AUTH_FILE})"
+  else
+    echo "  codex auth file: missing (${CODEX_AUTH_FILE})"
+    issues=$((issues + 1))
+  fi
+
+  if [[ -f "${CODEX_HOME}/config.toml" ]] && grep -q '^cli_auth_credentials_store = "file"' "${CODEX_HOME}/config.toml"; then
+    echo "  file auth mode: ok"
+  else
+    echo "  file auth mode: not pinned"
+    issues=$((issues + 1))
+  fi
+
+  count=$(find "${STORE_DIR}" -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+  echo "  saved accounts: ${count}"
+  if [[ "${count}" -lt 2 ]]; then
+    echo "  saved accounts status: need at least 2 for auto-rotation"
+    issues=$((issues + 1))
+  else
+    echo "  saved accounts status: ok"
+  fi
+
+  ensure_codex_pool_file
+  count=$(jq '.accounts | length' "${CODEX_POOL_FILE}")
+  echo "  pool accounts: ${count}"
+  if [[ "${count}" -lt 2 ]]; then
+    echo "  pool status: need at least 2 accounts in pool"
+    issues=$((issues + 1))
+  else
+    echo "  pool status: ok"
+  fi
+
+  if [[ "${issues}" -eq 0 ]]; then
+    echo "Doctor result: ready"
+  else
+    echo "Doctor result: ${issues} issue(s) found"
     return 1
   fi
+}
+
+run_rotation_self_test() {
+  local repo_root
+  repo_root="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+  if [[ -x "${repo_root}/tests/managed_codex_rotation_test.sh" ]]; then
+    "${repo_root}/tests/managed_codex_rotation_test.sh"
+  else
+    fail "Rotation self-test not found at ${repo_root}/tests/managed_codex_rotation_test.sh"
+  fi
+}
+
+run_managed_codex() {
+  local original_args=("$@")
+  local resume_global_args=()
+  local known_resume_target=""
+  local pending_resume_line=""
+  local preferred_account=""
+  local active_account=""
+  local next_account=""
+  local session_id=""
+  local session_file=""
+  local preferred_session_lookup=""
+  local stamp_file
+  local log_file
+  local exit_code
+  local cooldown_seconds
+  local cooldown_until
+  local attempt=0
+  local started_at
+  local cmd=()
+  local arg
+
+  if ! command -v "${AI_SWITCH_CODEX_BIN}" >/dev/null 2>&1; then
+    fail "Codex CLI not found: ${AI_SWITCH_CODEX_BIN}"
+  fi
+
+  if seamless_proxy_ready; then
+    run_seamless_codex_passthrough "${original_args[@]}"
+  fi
+
+  for arg in "${original_args[@]}"; do
+    case "${arg}" in
+      -h|--help|-V|--version)
+        run_unmanaged_codex_passthrough "${original_args[@]}"
+        ;;
+    esac
+  done
+
+  if ! is_managed_codex_supported_args "${original_args[@]}"; then
+    run_unmanaged_codex_passthrough "${original_args[@]}"
+  fi
+
+  require_codex_file_auth
+  ensure_codex_pool_file
+  ensure_codex_session_state_file
+  if [[ "$(jq '.accounts | length' "${CODEX_POOL_FILE}")" -eq 0 ]] && [[ "$(saved_account_count)" -ge 2 ]]; then
+    pool_sync_saved_accounts >/dev/null
+    echo "Initialized Codex rotation pool from saved accounts."
+  fi
+
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] || resume_global_args+=("${line}")
+  done < <(extract_resume_global_args "${original_args[@]}")
+  known_resume_target="$(extract_resume_target "${original_args[@]}")"
+
+  if [[ -z "${known_resume_target}" ]]; then
+    pending_resume_line="$(resolve_pending_managed_codex_resume "${PWD}" || true)"
+    if [[ -n "${pending_resume_line}" ]]; then
+      known_resume_target="${pending_resume_line%%$'\t'*}"
+      preferred_account="${pending_resume_line#*$'\t'}"
+      echo "Resuming interrupted managed Codex session '${known_resume_target}'."
+    fi
+  fi
+
+  if [[ -n "${preferred_account}" ]] && pool_account_available "${preferred_account}"; then
+    active_account="${preferred_account}"
+  else
+    active_account="$(pool_next_account)" || fail "No available Codex accounts in the rotation pool. Configure one with 'ai pool-set <account> [...]'."
+  fi
+  pool_mark_selected "${active_account}"
+  use_account_platform codex "${active_account}" >/dev/null
+  echo "Starting managed Codex with account '${active_account}'."
+
+  while :; do
+    attempt=$((attempt + 1))
+    stamp_file="$(new_tmp)"
+    : > "${stamp_file}"
+    started_at="$(date +%s)"
+    log_file="${CODEX_LOG_DIR}/codex-run-${started_at}-${attempt}.log"
+
+    if [[ -n "${session_id}" ]]; then
+      cmd=("${AI_SWITCH_CODEX_BIN}" "${resume_global_args[@]}" resume "${session_id}")
+    elif [[ "${known_resume_target}" == "__LAST__" ]]; then
+      cmd=("${AI_SWITCH_CODEX_BIN}" "${resume_global_args[@]}" resume --last)
+    elif [[ -n "${known_resume_target}" ]]; then
+      cmd=("${AI_SWITCH_CODEX_BIN}" "${resume_global_args[@]}" resume "${known_resume_target}")
+    else
+      cmd=("${AI_SWITCH_CODEX_BIN}" "${original_args[@]}")
+    fi
+
+    # Trap SIGINT so the wrapper survives if the user Ctrl+C's out of a hung Codex
+    trap ':' INT
+    if run_codex_command "${log_file}" "${cmd[@]}"; then
+      exit_code=0
+    else
+      exit_code=$?
+    fi
+    trap - INT
+
+    preferred_session_lookup="${session_id}"
+    if [[ -z "${preferred_session_lookup}" && -n "${known_resume_target}" && "${known_resume_target}" != "__LAST__" ]]; then
+      preferred_session_lookup="${known_resume_target}"
+    fi
+    session_file="$(detect_recent_session_file "${stamp_file}" "${PWD}" "${preferred_session_lookup}" || true)"
+    if [[ -z "${session_id}" ]]; then
+      if [[ -n "${session_file}" ]]; then
+        session_id="$(extract_session_id_from_file "${session_file}" || true)"
+      fi
+      if [[ -z "${session_id}" ]]; then
+        session_id="$(detect_session_id_from_log "${log_file}" || true)"
+      fi
+      if [[ -z "${session_id}" && "${known_resume_target}" == "__LAST__" ]]; then
+        session_id="$(resolve_last_session_id || true)"
+      elif [[ -z "${session_id}" && -n "${known_resume_target}" && "${known_resume_target}" != "__LAST__" ]]; then
+        session_id="${known_resume_target}"
+      fi
+    fi
+    if [[ -z "${session_file}" && -n "${session_id}" ]]; then
+      session_file="$(find_session_file_by_id "${session_id}" || true)"
+    fi
+    if [[ -n "${session_file}" ]]; then
+      cache_rate_limits_from_session_file "${active_account}" "${session_file}" "chatgpt-session" "${session_id}" || true
+    fi
+    if [[ -n "${session_id}" ]]; then
+      update_managed_codex_session_state "${session_id}" "${session_file}" "${PWD}" "${active_account}" true "running"
+    fi
+
+    if ! codex_log_has_rate_limit "${log_file}"; then
+      # If exited via SIGINT and usage is high, treat as a rate limit hang
+      if [[ "${exit_code}" -eq 130 ]]; then
+        local p_used
+        p_used="$(jq -r --arg account "${active_account}" '.accounts[$account].primary.used_percent // 0' "${CODEX_LIMITS_FILE}" 2>/dev/null || echo 0)"
+        local is_cooling
+        is_cooling="$(jq -r --arg account "${active_account}" --arg now "$(date +%s)" 'if (.cooldowns[$account].until_epoch // 0) > ($now | tonumber) then 1 else 0 end' "${CODEX_POOL_FILE}" 2>/dev/null || echo 0)"
+        
+        if awk "BEGIN {exit !(${p_used} >= 90)}" || [[ "${is_cooling}" -eq 1 ]]; then
+           echo "Ctrl+C detected during high usage (${p_used}%) or cooldown. Assuming rate limit hang."
+           pool_mark_cooldown "${active_account}" "$(( $(date +%s) + DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS ))" "rate_limited"
+        else
+           update_managed_codex_session_state "${session_id}" "${session_file}" "${PWD}" "${active_account}" true "sigint"
+           generate_sync_file
+           return "${exit_code}"
+        fi
+      else
+        if [[ "${exit_code}" -eq 0 ]]; then
+          update_managed_codex_session_state "${session_id}" "${session_file}" "${PWD}" "${active_account}" false "clean_exit"
+        else
+          update_managed_codex_session_state "${session_id}" "${session_file}" "${PWD}" "${active_account}" true "nonzero_exit"
+        fi
+        generate_sync_file
+        return "${exit_code}"
+      fi
+    else
+      cooldown_seconds="$(parse_rate_limit_cooldown_seconds "${log_file}")"
+      cooldown_until=$(( $(date +%s) + cooldown_seconds ))
+      pool_mark_cooldown "${active_account}" "${cooldown_until}" "rate_limited"
+    fi
+
+    next_account="$(pool_next_account "${active_account}" || true)"
+    if [[ -z "${next_account}" ]]; then
+      update_managed_codex_session_state "${session_id}" "${session_file}" "${PWD}" "${active_account}" true "rate_limited"
+      generate_sync_file
+      fail "Account '${active_account}' was rate limited, and no other pool account is currently available."
+    fi
+
+    if [[ -z "${session_id}" ]]; then
+      fail "Account '${active_account}' was rate limited, but the current Codex session ID could not be determined for auto-resume."
+    fi
+
+    use_account_platform codex "${next_account}" >/dev/null
+    pool_mark_selected "${next_account}"
+    export AI_ACCOUNT="${next_account}"
+    update_managed_codex_session_state "${session_id}" "${session_file}" "${PWD}" "${next_account}" true "rate_limited"
+    generate_sync_file
+    echo "Rate limit detected for '${active_account}'. Switched to '${next_account}' and resuming session '${session_id}'."
+    active_account="${next_account}"
+  done
 }
 
 migrate_legacy_store() {
@@ -710,6 +3369,38 @@ delete_account() {
   fi
 
   echo "Removed saved account '${account}' from the store."
+}
+
+rename_account() {
+  local old_account="$1"
+  local new_account="$2"
+  local old_file="${STORE_DIR}/${old_account}.json"
+  local new_file="${STORE_DIR}/${new_account}.json"
+  local tmp
+
+  validate_account_name "${old_account}"
+  validate_account_name "${new_account}"
+  [[ "${old_account}" != "${new_account}" ]] || fail "Old and new account names are the same."
+
+  prepare_account_entry "${old_account}" >/dev/null
+  [[ -f "${old_file}" ]] || fail "Account not found: ${old_account}"
+  [[ ! -f "${new_file}" ]] || fail "Target account already exists: ${new_account}"
+
+  mv "${old_file}" "${new_file}"
+  chmod 600 "${new_file}" || true
+
+  ensure_codex_pool_file
+  tmp="$(new_tmp)"
+  jq --arg old "${old_account}" --arg new "${new_account}" --arg updated_at "$(now_utc)" '
+    .accounts = [(.accounts // [])[] | if . == $old then $new else . end]
+    | .cooldowns = ((.cooldowns // {}) | with_entries(.key |= if . == $old then $new else . end))
+    | .last_account = (if .last_account == $old then $new else .last_account end)
+    | .updated_at = $updated_at
+  ' "${CODEX_POOL_FILE}" > "${tmp}"
+  mv "${tmp}" "${CODEX_POOL_FILE}"
+  chmod 600 "${CODEX_POOL_FILE}" || true
+
+  echo "Renamed saved account '${old_account}' to '${new_account}'."
 }
 
 save_account_platform() {
@@ -902,6 +3593,9 @@ use_account_platform() {
     opencode) use_account_opencode "${unified_file}" "${account}" ;;
     *) fail "Unsupported platform '${platform}'." ;;
   esac
+
+  # Atomically update sync file after any platform switch
+  generate_sync_file
 }
 
 use_account_all() {
@@ -930,6 +3624,228 @@ use_account_all() {
   if [[ "${did_any}" -eq 0 ]]; then
     fail "No platforms available to switch."
   fi
+}
+
+generate_sync_file() {
+  local codex_active
+  local session_id=""
+  local pending_resume="0"
+  codex_active="$(active_account_for_platform codex)"
+  ensure_codex_session_state_file
+  session_id="$(jq -r '.session_id // ""' "${CODEX_SESSION_STATE_FILE}")"
+  if [[ "$(jq -r '.pending_resume // false' "${CODEX_SESSION_STATE_FILE}")" == "true" ]]; then
+    pending_resume="1"
+  fi
+  cat > "${AI_SWITCH_HOME}/sync.sh" <<EOF
+export AI_ACCOUNT='${codex_active}'
+export AI_CODEX_SESSION='${session_id}'
+export AI_CODEX_RESUME_PENDING='${pending_resume}'
+EOF
+}
+
+run_watch() {
+  local interval=300
+  local daemon=0
+  local arg
+
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    shift
+    case "${arg}" in
+      --interval)
+        interval="$1"
+        shift
+        ;;
+      --daemon)
+        daemon=1
+        ;;
+      *)
+        fail "Unknown argument for 'watch': ${arg}"
+        ;;
+    esac
+  done
+
+  if [[ "${daemon}" -eq 1 ]]; then
+    nohup "$0" watch --interval "${interval}" > "${AI_SWITCH_HOME}/watch.log" 2>&1 &
+    echo "AI watch daemon started (PID $!). Logs at ${AI_SWITCH_HOME}/watch.log"
+    return 0
+  fi
+
+  echo "AI watch started (interval ${interval}s). Monitoring for rate limits..."
+  while :; do
+    local now_epoch
+    now_epoch="$(date +%s)"
+    local active
+    active="$(active_account_for_platform codex)"
+    
+    # Check if active is cooling
+    if jq -e --arg account "${active}" --arg now "${now_epoch}" '
+      (.cooldowns[$account].until_epoch // 0) > ($now | tonumber)
+    ' "${CODEX_POOL_FILE}" >/dev/null 2>&1; then
+      echo "[$(date)] Active account '${active}' is cooling. Rotating..."
+      rotate_best_account --no-refresh
+    fi
+    
+    # Check if usage > 90%
+    local p_used
+    p_used="$(jq -r --arg account "${active}" '.accounts[$account].primary.used_percent // 0' "${CODEX_LIMITS_FILE}")"
+    # bc may not be available, use awk
+    if awk "BEGIN {exit !(${p_used} > 90)}"; then
+        echo "[$(date)] Active account '${active}' usage is high (${p_used}%). Rotating..."
+        rotate_best_account --refresh
+    fi
+
+    sleep "${interval}"
+  done
+}
+
+show_sync() {
+  local codex_active
+  local session_id=""
+  local pending_resume="0"
+  codex_active="$(active_account_for_platform codex)"
+  ensure_codex_session_state_file
+  session_id="$(jq -r '.session_id // ""' "${CODEX_SESSION_STATE_FILE}")"
+  if [[ "$(jq -r '.pending_resume // false' "${CODEX_SESSION_STATE_FILE}")" == "true" ]]; then
+    pending_resume="1"
+  fi
+  echo "export AI_ACCOUNT='${codex_active}';"
+  echo "export AI_CODEX_SESSION='${session_id}';"
+  echo "export AI_CODEX_RESUME_PENDING='${pending_resume}';"
+}
+
+show_total() {
+  local accounts=()
+  while IFS= read -r account; do
+    [[ -n "${account}" ]] && accounts+=("${account}")
+  done < <(pool_list_accounts)
+
+  if [[ "${#accounts[@]}" -eq 0 ]]; then
+    fail "No accounts in the rotation pool."
+  fi
+
+  refresh_codex_limits_cache_for_accounts 0 0 "${accounts[@]}" || true
+
+  local now_epoch
+  now_epoch="$(date +%s)"
+  local active_account
+  active_account="$(active_account_for_platform codex)"
+  local best_account
+  best_account="$(select_best_ready_account "${now_epoch}" "${accounts[@]}" || true)"
+  local maybe_proxy="inactive"
+  if seamless_proxy_ready; then
+    maybe_proxy="active"
+  fi
+
+  local py_script
+  py_script=$(cat <<'EOF'
+import json
+import sys
+import shutil
+import re
+import time
+
+def colorize(code, text):
+    if not sys.stdout.isatty(): return text
+    return f"\033[{code}m{text}\033[0m"
+
+def visible_len(text):
+    return len(re.sub(r'\x1b\[[0-9;]*m', '', str(text)))
+
+def smooth_bar(pct, width=30):
+    blocks = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"]
+    if pct < 0: pct = 0
+    if pct > 100: pct = 100
+    total_eighths = int(round((pct / 100.0) * width * 8))
+    full_blocks = total_eighths // 8
+    remainder = total_eighths % 8
+    bar = "█" * full_blocks
+    if full_blocks < width:
+        bar += blocks[remainder]
+        bar += " " * (width - full_blocks - 1)
+    return bar
+
+def main():
+    try:
+        with open(sys.argv[1]) as f: pool_data = json.load(f)
+    except: pool_data = {"accounts": [], "cooldowns": {}}
+    try:
+        with open(sys.argv[2]) as f: limits_data = json.load(f)
+    except: limits_data = {"accounts": {}}
+    
+    accounts = sys.argv[3].split(",") if sys.argv[3] else []
+    active = sys.argv[4]
+    
+    healthy, cooling = 0, 0
+    sum_p, count_p = 0, 0
+    sum_s, count_s = 0, 0
+    
+    def safe_get(obj, *keys, default=None):
+        for key in keys:
+            if not isinstance(obj, dict): return default
+            obj = obj.get(key)
+            if obj is None: return default
+        return obj
+
+    for acc in accounts:
+        acc_data = limits_data.get("accounts", {}).get(acc)
+        if not isinstance(acc_data, dict): acc_data = {}
+        
+        # Count cooling
+        cooldown = safe_get(pool_data, "cooldowns", acc, "until_epoch", default=0)
+        if int(cooldown or 0) > int(time.time()): cooling += 1
+        else: healthy += 1
+        
+        p = safe_get(acc_data, "primary", "used_percent")
+        if p is not None: sum_p += float(p); count_p += 1
+        s = safe_get(acc_data, "secondary", "used_percent")
+        if s is not None: sum_s += float(s); count_s += 1
+
+    avg_p = sum_p / count_p if count_p > 0 else 0
+    avg_s = sum_s / count_s if count_s > 0 else 0
+    avail_p = (100 - avg_p) * count_p / 100.0
+    avail_s = (100 - avg_s) * count_s / 100.0
+    
+    term_width = shutil.get_terminal_size((80, 20)).columns
+    box_w = min(term_width - 4, 70)
+    
+    print("")
+    print(colorize("1;34", "┏" + "━"*box_w + "┓"))
+    title = " 📊 GLOBAL POOL SUMMARY "
+    print(colorize("1;34", "┃") + colorize("1;37;44", title.center(box_w)) + colorize("1;34", "┃"))
+    print(colorize("1;34", "┣" + "━"*box_w + "┫"))
+    
+    def row(label, val):
+        l = f" {label}:"
+        v = f"{val} "
+        return colorize("1;34", "┃") + colorize("37", l) + " " * (box_w - len(l) - len(v)) + colorize("1;32", v) + colorize("1;34", "┃")
+
+    print(row("Total Accounts", len(accounts)))
+    print(row("Ready Status", f"{healthy} active / {cooling} cooling"))
+    print(row("Current Active", active))
+    print(colorize("1;34", "┣" + "━"*box_w + "┫"))
+    
+    def bar_row(label, pct, avail):
+        label_line = f" {label} UTILIZATION ({int(pct)}%)"
+        print(colorize("1;34", "┃") + colorize("1;37", label_line.ljust(box_w)) + colorize("1;34", "┃"))
+        bar = smooth_bar(pct, box_w - 4)
+        color = "31" if pct > 90 else "33" if pct > 70 else "32"
+        bar_view = colorize(color, f"  [{bar.replace(' ', '·')}]  ")
+        print(colorize("1;34", "┃") + bar_view + colorize("1;34", "┃"))
+        avail_line = f" Capacity Available: {avail:.1f} Full Units"
+        print(colorize("1;34", "┃") + colorize("90", avail_line.ljust(box_w)) + colorize("1;34", "┃"))
+
+    bar_row("5H PRIMARY", avg_p, avail_p)
+    print(colorize("1;34", "┃") + " "*box_w + colorize("1;34", "┃"))
+    bar_row("7D SECONDARY", avg_s, avail_s)
+    
+    print(colorize("1;34", "┗" + "━"*box_w + "┛"))
+    print("")
+
+if __name__ == "__main__": main()
+EOF
+)
+  python3 -c "${py_script}" "${CODEX_POOL_FILE}" "${CODEX_LIMITS_FILE}" "$(IFS=,; echo "${accounts[*]}")" "${active_account}"
 }
 
 parse_args() {
@@ -963,7 +3879,7 @@ parse_args() {
         platform="${1#*=}"
         shift
         ;;
-      list|save|use|usage|delete)
+      list|save|use|usage|status|rotate|delete|rename|pool-list|pool-set|pool-sync|pool-add|pool-remove|pool-cooldown|pool-reset-cooldowns|pool-status|total|codex|doctor|test-rotation|codex-wrapper-status|codex-install-wrapper|codex-uninstall-wrapper|sync|watch|setup-sync|install-sync)
         command="$1"
         shift
         break
@@ -976,12 +3892,12 @@ parse_args() {
         fail "Unknown option '${1}'."
         ;;
       *)
-        fail "Expected command list/save/use/usage/delete after options."
+        fail "Expected a valid ai command after options."
         ;;
     esac
   done
 
-  [[ -n "${command}" ]] || fail "Missing command. Use list, save, use, usage, or delete."
+  [[ -n "${command}" ]] || fail "Missing command. Use --help to see available ai commands."
 
   if [[ -n "${platform}" ]]; then
     validate_platform "${platform}"
@@ -993,6 +3909,90 @@ parse_args() {
     usage)
       [[ $# -eq 0 ]] || fail "Unexpected arguments for 'usage'."
       show_usage_limits
+      ;;
+    status)
+      show_status "$@"
+      ;;
+    rotate)
+      rotate_best_account "$@"
+      ;;
+    total)
+      show_total
+      ;;
+    watch)
+      run_watch "$@"
+      ;;
+    sync)
+      show_sync
+      ;;
+    setup-sync)
+      echo "To permanently sync ai-switch with your shell (including background rotations), add this to your ~/.bashrc or ~/.zshrc:"
+      echo ""
+      echo "  # ai-switch automatic sync"
+      echo "  _ai_sync_hook() { [[ -f \"${AI_SWITCH_HOME}/sync.sh\" ]] && source \"${AI_SWITCH_HOME}/sync.sh\"; }"
+      echo "  if [[ -n \"\$ZSH_VERSION\" ]]; then"
+      echo "    autoload -Uz add-zsh-hook && add-zsh-hook precmd _ai_sync_hook"
+      echo "  elif [[ -n \"\$BASH_VERSION\" ]]; then"
+      echo "    PROMPT_COMMAND=\"_ai_sync_hook; \${PROMPT_COMMAND:-}\""
+      echo "  fi"
+      echo ""
+      echo "Or simply run: ai install-sync"
+      ;;
+    install-sync)
+      local hook_block
+      hook_block=$(cat <<EOF
+
+# ai-switch: Ultra-Reliable Shell Sync
+ai() {
+  # Sync environment before execution
+  [[ -f "${AI_SWITCH_HOME}/sync.sh" ]] && . "${AI_SWITCH_HOME}/sync.sh"
+  command ai "\$@"
+  local ret=\$?
+  # Sync environment after execution (to catch rotations)
+  [[ -f "${AI_SWITCH_HOME}/sync.sh" ]] && . "${AI_SWITCH_HOME}/sync.sh"
+  return \$ret
+}
+codex() {
+  # Keep the calling shell in sync around every managed Codex run.
+  [[ -f "${AI_SWITCH_HOME}/sync.sh" ]] && . "${AI_SWITCH_HOME}/sync.sh"
+  command codex "\$@"
+  local ret=\$?
+  [[ -f "${AI_SWITCH_HOME}/sync.sh" ]] && . "${AI_SWITCH_HOME}/sync.sh"
+  return \$ret
+}
+# Background sync hook for prompt refresh
+_ai_prompt_sync() { [[ -f "${AI_SWITCH_HOME}/sync.sh" ]] && . "${AI_SWITCH_HOME}/sync.sh"; }
+if [[ -n "\$ZSH_VERSION" ]]; then
+  autoload -Uz add-zsh-hook && add-zsh-hook precmd _ai_prompt_sync
+elif [[ -n "\$BASH_VERSION" ]]; then
+  case "\$PROMPT_COMMAND" in
+    *_ai_prompt_sync*) ;;
+    *) PROMPT_COMMAND="_ai_prompt_sync; \${PROMPT_COMMAND:-}" ;;
+  esac
+fi
+EOF
+)
+      local updated=0
+      for f in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+        if [[ -f "${f}" ]]; then
+          # Clean up old versions first
+          sed -i '/ai-switch automatic sync hook/d' "${f}" 2>/dev/null || true
+          sed -i '/_ai_sync_hook/d' "${f}" 2>/dev/null || true
+          
+          if grep -q "ai-switch: Ultra-Reliable Shell Sync" "${f}"; then
+            echo "Sync system already optimized in ${f}."
+          else
+            echo "${hook_block}" >> "${f}"
+            echo "Optimized sync system installed into ${f}."
+            updated=1
+          fi
+        fi
+      done
+      generate_sync_file
+      if [[ "${updated}" -eq 1 ]]; then
+        echo "✅ SUCCESS: Shell integration upgraded."
+        echo "👉 Action: Run 'source ~/.bashrc' (or restart terminal) to apply permanently."
+      fi
       ;;
     list)
       [[ $# -eq 0 ]] || fail "Unexpected arguments for 'list'."
@@ -1026,6 +4026,64 @@ parse_args() {
       [[ $# -eq 1 ]] || fail "Usage: ai delete <account>"
       validate_account_name "$1"
       delete_account "$1"
+      ;;
+    rename)
+      [[ $# -eq 2 ]] || fail "Usage: ai rename <old-account> <new-account>"
+      rename_account "$1" "$2"
+      ;;
+    pool-list)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'pool-list'."
+      pool_list_accounts
+      ;;
+    pool-set)
+      [[ $# -ge 1 ]] || fail "Usage: ai pool-set <account> [account...]"
+      pool_set_accounts "$@"
+      ;;
+    pool-sync)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'pool-sync'."
+      pool_sync_saved_accounts
+      ;;
+    pool-add)
+      [[ $# -ge 1 ]] || fail "Usage: ai pool-add <account> [account...]"
+      pool_add_accounts "$@"
+      ;;
+    pool-remove)
+      [[ $# -ge 1 ]] || fail "Usage: ai pool-remove <account> [account...]"
+      pool_remove_accounts "$@"
+      ;;
+    pool-cooldown)
+      [[ $# -ge 1 && $# -le 2 ]] || fail "Usage: ai pool-cooldown <account> [seconds]"
+      pool_set_manual_cooldown "$@"
+      ;;
+    pool-reset-cooldowns)
+      pool_reset_cooldowns "$@"
+      ;;
+    pool-status)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'pool-status'."
+      pool_status
+      ;;
+    codex)
+      run_managed_codex "$@"
+      ;;
+    doctor)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'doctor'."
+      doctor_check
+      ;;
+    test-rotation)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'test-rotation'."
+      run_rotation_self_test
+      ;;
+    codex-wrapper-status)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'codex-wrapper-status'."
+      codex_wrapper_status
+      ;;
+    codex-install-wrapper)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'codex-install-wrapper'."
+      install_codex_wrapper
+      ;;
+    codex-uninstall-wrapper)
+      [[ $# -eq 0 ]] || fail "Unexpected arguments for 'codex-uninstall-wrapper'."
+      uninstall_codex_wrapper
       ;;
     *)
       fail "Unknown command '${command}'."

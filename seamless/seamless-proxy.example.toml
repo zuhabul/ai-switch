@@ -1,0 +1,19 @@
+# Local listener for the OpenAI-compatible proxy.
+listen_host = "127.0.0.1"
+listen_port = 8788
+
+# Upstream OpenAI API endpoint (v1 root).
+upstream_base_url = "https://api.openai.com/v1"
+
+# Client key used by Codex when talking to the local proxy.
+# Set this to a long random string.
+client_api_key = "replace-with-strong-local-key"
+
+# Retry strategy
+retry_statuses = [429, 500, 502, 503, 504]
+max_attempts = 7
+request_timeout_seconds = 600
+
+# One OpenAI API key per line (7 accounts -> 7 keys).
+keys_file = "~/.config/ai-switch/openai-keypool.keys"
+

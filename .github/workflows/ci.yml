@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Run v1 shell tests
+        run: |
+          chmod +x tests/*.sh
+          ./tests/managed_codex_rotation_test.sh
+          ./tests/managed_codex_rotation_matrix_test.sh
+          ./tests/seamless_proxy_rotation_test.sh
+          ./tests/status_ui_test.sh
+
+  go-v2-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Test v2
+        run: |
+          cd v2
+          go test ./...
+      - name: Build v2 binaries
+        run: |
+          cd v2
+          go build ./cmd/aiswitch ./cmd/aiswitchd

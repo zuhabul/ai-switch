@@ -6,16 +6,19 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/zuhabul/ai-switch/v2/internal/adapter"
 	"github.com/zuhabul/ai-switch/v2/internal/model"
 	"github.com/zuhabul/ai-switch/v2/internal/service"
+	"github.com/zuhabul/ai-switch/v2/internal/vault"
 )
 
 type Server struct {
-	svc *service.Service
+	svc   *service.Service
+	vault *vault.FileVault
 }
 
-func NewServer(svc *service.Service) *Server {
-	return &Server{svc: svc}
+func NewServer(svc *service.Service, v *vault.FileVault) *Server {
+	return &Server{svc: svc, vault: v}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -26,6 +29,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v2/leases", s.leases)
 	mux.HandleFunc("/v2/route", s.route)
 	mux.HandleFunc("/v2/health", s.healthUpdate)
+	mux.HandleFunc("/v2/secret-bindings", s.secretBindings)
+	mux.HandleFunc("/v2/secrets", s.secrets)
+	mux.HandleFunc("/v2/runtime/plan", s.runtimePlan)
 	return loggingMiddleware(mux)
 }
 
@@ -159,6 +165,190 @@ func (s *Server) healthUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+}
+
+func (s *Server) secretBindings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		profileID := r.URL.Query().Get("profile_id")
+		if profileID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "profile_id is required"})
+			return
+		}
+		bindings, err := s.svc.ListSecretBindings(r.Context(), profileID)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, bindings)
+	case http.MethodPost:
+		var req struct {
+			ProfileID string `json:"profile_id"`
+			EnvVar    string `json:"env_var"`
+			SecretKey string `json:"secret_key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.svc.BindSecret(r.Context(), req.ProfileID, req.EnvVar, req.SecretKey); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	case http.MethodDelete:
+		profileID := r.URL.Query().Get("profile_id")
+		envVar := r.URL.Query().Get("env_var")
+		if profileID == "" || envVar == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "profile_id and env_var are required"})
+			return
+		}
+		if err := s.svc.UnbindSecret(r.Context(), profileID, envVar); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) secrets(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		names, err := s.vault.List()
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": names})
+	case http.MethodPost:
+		var req struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.vault.Set(req.Name, req.Value); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	case http.MethodDelete:
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name is required"})
+			return
+		}
+		if err := s.vault.Delete(name); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) runtimePlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req model.RuntimePlanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if req.Frontend == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "frontend is required"})
+		return
+	}
+	if req.TaskClass == "" {
+		req.TaskClass = "coding"
+	}
+	if req.Owner == "" {
+		req.Owner = "runtime-plan-api"
+	}
+	decision, err := s.svc.Route(r.Context(), model.TaskRequest{
+		Frontend:           req.Frontend,
+		TaskClass:          req.TaskClass,
+		RequiredProtocol:   req.RequiredProtocol,
+		PreferredProviders: req.PreferredProviders,
+		RequireTags:        req.RequireTags,
+		Owner:              req.Owner,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "decision": decision})
+		return
+	}
+
+	ttl := 15 * time.Minute
+	if req.LeaseTTLSeconds > 0 {
+		ttl = time.Duration(req.LeaseTTLSeconds) * time.Second
+	}
+	lease, err := s.svc.AcquireLease(r.Context(), decision.ProfileID, req.Frontend, req.Owner, ttl)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	releaseOnErr := true
+	defer func() {
+		if releaseOnErr {
+			_ = s.svc.ReleaseLease(r.Context(), lease.ID)
+		}
+	}()
+
+	profile, err := s.svc.GetProfile(r.Context(), decision.ProfileID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	bindings, err := s.svc.ListSecretBindings(r.Context(), decision.ProfileID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	env := map[string]string{
+		"AI_SWITCH_PROFILE_ID": decision.ProfileID,
+		"AI_SWITCH_LEASE_ID":   lease.ID,
+	}
+	for envVar, secretKey := range bindings {
+		value, err := s.vault.Get(secretKey)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		env[envVar] = value
+	}
+
+	spec, err := adapter.BuildDefault(profile.Frontend, adapter.LaunchRequest{
+		Frontend: req.Frontend,
+		Prompt:   req.Prompt,
+		Cwd:      req.Cwd,
+		Model:    req.Model,
+		Args:     req.CommandArgs,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	for k, v := range spec.Env {
+		env[k] = v
+	}
+
+	releaseOnErr = false
+	writeJSON(w, http.StatusOK, model.RuntimePlan{
+		ProfileID: decision.ProfileID,
+		LeaseID:   lease.ID,
+		Command:   spec.Command,
+		Args:      spec.Args,
+		Env:       env,
+		Reasons:   decision.Reasons,
+	})
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

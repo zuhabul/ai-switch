@@ -14,22 +14,25 @@ import (
 	"github.com/zuhabul/ai-switch/v2/internal/api"
 	"github.com/zuhabul/ai-switch/v2/internal/service"
 	"github.com/zuhabul/ai-switch/v2/internal/store"
+	"github.com/zuhabul/ai-switch/v2/internal/vault"
 )
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:4417", "listen address")
 	statePath := flag.String("state", defaultStatePath(), "state file path")
+	vaultPath := flag.String("vault", defaultVaultPath(), "vault file path")
 	flag.Parse()
 
 	st := store.NewFileStore(*statePath)
 	svc := service.New(st)
+	v := vault.NewFileVault(*vaultPath)
 	if err := svc.Init(context.Background()); err != nil {
 		log.Fatalf("init failed: %v", err)
 	}
 
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewServer(svc).Handler(),
+		Handler:           api.NewServer(svc, v).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -57,4 +60,12 @@ func defaultStatePath() string {
 		return ".aiswitch/state.json"
 	}
 	return filepath.Join(h, ".config", "ai-switch-v2", "state.json")
+}
+
+func defaultVaultPath() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ".aiswitch/secrets.enc.json"
+	}
+	return filepath.Join(h, ".config", "ai-switch-v2", "secrets.enc.json")
 }

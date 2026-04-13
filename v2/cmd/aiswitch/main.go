@@ -14,6 +14,7 @@ import (
 	"github.com/zuhabul/ai-switch/v2/internal/model"
 	"github.com/zuhabul/ai-switch/v2/internal/service"
 	"github.com/zuhabul/ai-switch/v2/internal/store"
+	"github.com/zuhabul/ai-switch/v2/internal/vault"
 )
 
 func main() {
@@ -27,6 +28,7 @@ func main() {
 	if err := svc.Init(ctx); err != nil {
 		exitErr(err)
 	}
+	v := vault.NewFileVault(defaultVaultPath())
 
 	switch os.Args[1] {
 	case "init":
@@ -43,6 +45,10 @@ func main() {
 		handleRoute(ctx, svc, os.Args[2:])
 	case "lease":
 		handleLease(ctx, svc, os.Args[2:])
+	case "secret":
+		handleSecret(ctx, svc, v, os.Args[2:])
+	case "runtime":
+		handleRuntime(ctx, svc, v, os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -234,6 +240,172 @@ func handleLease(ctx context.Context, svc *service.Service, args []string) {
 	}
 }
 
+func handleSecret(ctx context.Context, svc *service.Service, v *vault.FileVault, args []string) {
+	if len(args) == 0 {
+		exitErr(fmt.Errorf("secret requires subcommand set|get|list|delete|bind|unbind|bindings"))
+	}
+	switch args[0] {
+	case "set":
+		fs := flag.NewFlagSet("secret set", flag.ExitOnError)
+		name := fs.String("name", "", "secret name")
+		value := fs.String("value", "", "secret value")
+		_ = fs.Parse(args[1:])
+		if err := v.Set(*name, *value); err != nil {
+			exitErr(err)
+		}
+		fmt.Println("ok")
+	case "get":
+		fs := flag.NewFlagSet("secret get", flag.ExitOnError)
+		name := fs.String("name", "", "secret name")
+		_ = fs.Parse(args[1:])
+		val, err := v.Get(*name)
+		if err != nil {
+			exitErr(err)
+		}
+		fmt.Println(val)
+	case "list":
+		names, err := v.List()
+		if err != nil {
+			exitErr(err)
+		}
+		printJSON(names)
+	case "delete":
+		fs := flag.NewFlagSet("secret delete", flag.ExitOnError)
+		name := fs.String("name", "", "secret name")
+		_ = fs.Parse(args[1:])
+		if err := v.Delete(*name); err != nil {
+			exitErr(err)
+		}
+		fmt.Println("ok")
+	case "bind":
+		fs := flag.NewFlagSet("secret bind", flag.ExitOnError)
+		profileID := fs.String("profile", "", "profile id")
+		envVar := fs.String("env", "", "env var")
+		secretName := fs.String("name", "", "secret name")
+		_ = fs.Parse(args[1:])
+		if _, err := v.Get(*secretName); err != nil {
+			exitErr(fmt.Errorf("secret validation failed: %w", err))
+		}
+		if err := svc.BindSecret(ctx, *profileID, *envVar, *secretName); err != nil {
+			exitErr(err)
+		}
+		fmt.Println("ok")
+	case "unbind":
+		fs := flag.NewFlagSet("secret unbind", flag.ExitOnError)
+		profileID := fs.String("profile", "", "profile id")
+		envVar := fs.String("env", "", "env var")
+		_ = fs.Parse(args[1:])
+		if err := svc.UnbindSecret(ctx, *profileID, *envVar); err != nil {
+			exitErr(err)
+		}
+		fmt.Println("ok")
+	case "bindings":
+		fs := flag.NewFlagSet("secret bindings", flag.ExitOnError)
+		profileID := fs.String("profile", "", "profile id")
+		_ = fs.Parse(args[1:])
+		bindings, err := svc.ListSecretBindings(ctx, *profileID)
+		if err != nil {
+			exitErr(err)
+		}
+		printJSON(bindings)
+	default:
+		exitErr(fmt.Errorf("unknown secret command %s", args[0]))
+	}
+}
+
+func handleRuntime(ctx context.Context, svc *service.Service, v *vault.FileVault, args []string) {
+	if len(args) == 0 {
+		exitErr(fmt.Errorf("runtime requires subcommand plan|release"))
+	}
+	switch args[0] {
+	case "plan":
+		fs := flag.NewFlagSet("runtime plan", flag.ExitOnError)
+		frontend := fs.String("frontend", "", "frontend")
+		task := fs.String("task", "coding", "task class")
+		protocol := fs.String("protocol", "", "required protocol")
+		providers := fs.String("providers", "", "comma-separated preferred providers")
+		tags := fs.String("tags", "", "comma-separated required tags")
+		owner := fs.String("owner", "runtime-plan-cli", "owner")
+		cwd := fs.String("cwd", "", "working directory")
+		modelName := fs.String("model", "", "model")
+		prompt := fs.String("prompt", "", "prompt")
+		leaseTTL := fs.Duration("lease-ttl", 15*time.Minute, "lease ttl")
+		_ = fs.Parse(args[1:])
+		decision, err := svc.Route(ctx, model.TaskRequest{
+			Frontend:           *frontend,
+			TaskClass:          *task,
+			RequiredProtocol:   *protocol,
+			PreferredProviders: splitCSV(*providers),
+			RequireTags:        splitCSV(*tags),
+			Owner:              *owner,
+		})
+		if err != nil {
+			exitErr(fmt.Errorf("%w; decision=%s", err, asJSON(decision)))
+		}
+		profile, err := svc.GetProfile(ctx, decision.ProfileID)
+		if err != nil {
+			exitErr(err)
+		}
+		lease, err := svc.AcquireLease(ctx, decision.ProfileID, profile.Frontend, *owner, *leaseTTL)
+		if err != nil {
+			exitErr(err)
+		}
+		releaseOnErr := true
+		defer func() {
+			if releaseOnErr {
+				_ = svc.ReleaseLease(ctx, lease.ID)
+			}
+		}()
+		bindings, err := svc.ListSecretBindings(ctx, decision.ProfileID)
+		if err != nil {
+			exitErr(err)
+		}
+		env := map[string]string{
+			"AI_SWITCH_PROFILE_ID": decision.ProfileID,
+			"AI_SWITCH_LEASE_ID":   lease.ID,
+		}
+		for envVar, secretKey := range bindings {
+			val, err := v.Get(secretKey)
+			if err != nil {
+				exitErr(err)
+			}
+			env[envVar] = val
+		}
+		spec, err := adapter.BuildDefault(profile.Frontend, adapter.LaunchRequest{
+			Frontend: *frontend,
+			Prompt:   *prompt,
+			Cwd:      *cwd,
+			Model:    *modelName,
+			Args:     fs.Args(),
+		})
+		if err != nil {
+			exitErr(err)
+		}
+		for k, val := range spec.Env {
+			env[k] = val
+		}
+		releaseOnErr = false
+		printJSON(model.RuntimePlan{
+			ProfileID: decision.ProfileID,
+			LeaseID:   lease.ID,
+			Command:   spec.Command,
+			Args:      spec.Args,
+			Env:       env,
+			Reasons:   decision.Reasons,
+		})
+	case "release":
+		fs := flag.NewFlagSet("runtime release", flag.ExitOnError)
+		leaseID := fs.String("lease", "", "lease id")
+		_ = fs.Parse(args[1:])
+		if err := svc.ReleaseLease(ctx, *leaseID); err != nil {
+			exitErr(err)
+		}
+		fmt.Println("ok")
+	default:
+		exitErr(fmt.Errorf("unknown runtime command %s", args[0]))
+	}
+}
+
 func splitCSV(v string) []string {
 	if strings.TrimSpace(v) == "" {
 		return nil
@@ -276,6 +448,14 @@ func defaultStatePath() string {
 	return filepath.Join(h, ".config", "ai-switch-v2", "state.json")
 }
 
+func defaultVaultPath() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ".aiswitch/secrets.enc.json"
+	}
+	return filepath.Join(h, ".config", "ai-switch-v2", "secrets.enc.json")
+}
+
 func usage() {
 	fmt.Println(`aiswitch v2
 
@@ -291,5 +471,13 @@ Usage:
   aiswitch route --frontend codex --task coding --protocol app_server
   aiswitch lease acquire --profile ID --frontend codex --owner multica --ttl 15m
   aiswitch lease release --id LEASE_ID
-  aiswitch lease list`)
+  aiswitch lease list
+  aiswitch secret set --name KEY --value VALUE
+  aiswitch secret get --name KEY
+  aiswitch secret list
+  aiswitch secret delete --name KEY
+  aiswitch secret bind --profile PROFILE --env ENV_VAR --name SECRET_KEY
+  aiswitch secret bindings --profile PROFILE
+  aiswitch runtime plan --frontend codex --task coding --protocol app_server [--lease-ttl 15m]
+  aiswitch runtime release --lease LEASE_ID`)
 }

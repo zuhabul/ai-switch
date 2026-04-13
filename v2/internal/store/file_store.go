@@ -45,6 +45,9 @@ func (s *FileStore) Load() (model.State, error) {
 	if state.Leases == nil {
 		state.Leases = map[string]model.Lease{}
 	}
+	if state.SecretBindings == nil {
+		state.SecretBindings = map[string]map[string]string{}
+	}
 	if state.Policies == nil {
 		state.Policies = []model.PolicyRule{}
 	}

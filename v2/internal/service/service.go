@@ -78,6 +78,19 @@ func (s *Service) ListProfiles(ctx context.Context) ([]model.Profile, error) {
 	return out, nil
 }
 
+func (s *Service) GetProfile(ctx context.Context, profileID string) (model.Profile, error) {
+	_ = ctx
+	state, err := s.store.Load()
+	if err != nil {
+		return model.Profile{}, err
+	}
+	p, ok := state.Profiles[profileID]
+	if !ok {
+		return model.Profile{}, fmt.Errorf("unknown profile %s", profileID)
+	}
+	return p, nil
+}
+
 func (s *Service) AddPolicy(ctx context.Context, rule model.PolicyRule) error {
 	_ = ctx
 	s.mu.Lock()
@@ -113,6 +126,69 @@ func (s *Service) ListPolicies(ctx context.Context) ([]model.PolicyRule, error) 
 		}
 		return 0
 	})
+	return out, nil
+}
+
+func (s *Service) BindSecret(ctx context.Context, profileID, envVar, secretKey string) error {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.Profiles[profileID]; !ok {
+		return fmt.Errorf("unknown profile %s", profileID)
+	}
+	if envVar == "" || secretKey == "" {
+		return fmt.Errorf("env var and secret key are required")
+	}
+	if state.SecretBindings[profileID] == nil {
+		state.SecretBindings[profileID] = map[string]string{}
+	}
+	state.SecretBindings[profileID][envVar] = secretKey
+	return s.store.Save(state)
+}
+
+func (s *Service) UnbindSecret(ctx context.Context, profileID, envVar string) error {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	if _, ok := state.Profiles[profileID]; !ok {
+		return fmt.Errorf("unknown profile %s", profileID)
+	}
+	if state.SecretBindings[profileID] == nil {
+		return fmt.Errorf("no bindings for profile %s", profileID)
+	}
+	if _, ok := state.SecretBindings[profileID][envVar]; !ok {
+		return fmt.Errorf("binding %s not found for profile %s", envVar, profileID)
+	}
+	delete(state.SecretBindings[profileID], envVar)
+	if len(state.SecretBindings[profileID]) == 0 {
+		delete(state.SecretBindings, profileID)
+	}
+	return s.store.Save(state)
+}
+
+func (s *Service) ListSecretBindings(ctx context.Context, profileID string) (map[string]string, error) {
+	_ = ctx
+	state, err := s.store.Load()
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := state.Profiles[profileID]; !ok {
+		return nil, fmt.Errorf("unknown profile %s", profileID)
+	}
+	out := map[string]string{}
+	for k, v := range state.SecretBindings[profileID] {
+		out[k] = v
+	}
 	return out, nil
 }
 

@@ -278,6 +278,12 @@ go test ./...
 go build ./cmd/aiswitch ./cmd/aiswitchd
 ```
 
+Run full `v2` end-to-end tests from repo root:
+
+```bash
+./tests/v2_end_to_end_test.sh
+```
+
 ### Example v2 workflow
 
 ```bash
@@ -288,6 +294,20 @@ go run ./cmd/aiswitch profile add --id codex-main --provider openai --frontend c
 go run ./cmd/aiswitch health set --id codex-main --r5m 50 --rh 500 --latency 120 --error 0.2
 go run ./cmd/aiswitch route --frontend codex --task coding --protocol app_server
 go run ./cmd/aiswitchd --addr 127.0.0.1:4417
+```
+
+Secret vault + runtime planning:
+
+```bash
+go run ./cmd/aiswitch secret set --name openai_main --value sk-xxx
+go run ./cmd/aiswitch secret bind --profile codex-main --env OPENAI_API_KEY --name openai_main
+go run ./cmd/aiswitch runtime plan --frontend codex --task coding --protocol app_server
+```
+
+Agent wrappers (Multica/Hermes/OpenCode/OpenClaw/Gemini/Claude integration):
+
+```bash
+./v2/scripts/install-agent-wrappers.sh ~/.local/bin
 ```
 
 For migration planning and production gates, see:

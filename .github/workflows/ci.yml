@@ -34,3 +34,7 @@ jobs:
         run: |
           cd v2
           go build ./cmd/aiswitch ./cmd/aiswitchd
+      - name: Run v2 end-to-end test
+        run: |
+          chmod +x tests/v2_end_to_end_test.sh
+          ./tests/v2_end_to_end_test.sh

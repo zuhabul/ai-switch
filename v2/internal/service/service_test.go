@@ -50,3 +50,24 @@ func TestRoute(t *testing.T) {
 		t.Fatalf("expected b, got %s", d.ProfileID)
 	}
 }
+
+func TestSecretBindings(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	if err := svc.AddProfile(ctx, model.Profile{ID: "p1", Provider: "openai", Frontend: "codex", AuthMethod: "chatgpt", Protocol: "app_server", Enabled: true}); err != nil {
+		t.Fatalf("add profile: %v", err)
+	}
+	if err := svc.BindSecret(ctx, "p1", "OPENAI_API_KEY", "openai-main"); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	bindings, err := svc.ListSecretBindings(ctx, "p1")
+	if err != nil {
+		t.Fatalf("list bindings: %v", err)
+	}
+	if bindings["OPENAI_API_KEY"] != "openai-main" {
+		t.Fatalf("binding mismatch: %v", bindings)
+	}
+	if err := svc.UnbindSecret(ctx, "p1", "OPENAI_API_KEY"); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+}

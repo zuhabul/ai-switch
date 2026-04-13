@@ -62,18 +62,43 @@ type RouteDecision struct {
 	Rejected  []string `json:"rejected,omitempty"`
 }
 
+type RuntimePlanRequest struct {
+	Frontend           string   `json:"frontend"`
+	TaskClass          string   `json:"task_class"`
+	RequiredProtocol   string   `json:"required_protocol,omitempty"`
+	PreferredProviders []string `json:"preferred_providers,omitempty"`
+	RequireTags        []string `json:"require_tags,omitempty"`
+	Owner              string   `json:"owner,omitempty"`
+	Cwd                string   `json:"cwd,omitempty"`
+	Model              string   `json:"model,omitempty"`
+	Prompt             string   `json:"prompt,omitempty"`
+	CommandArgs        []string `json:"command_args,omitempty"`
+	LeaseTTLSeconds    int      `json:"lease_ttl_seconds,omitempty"`
+}
+
+type RuntimePlan struct {
+	ProfileID string            `json:"profile_id"`
+	LeaseID   string            `json:"lease_id"`
+	Command   string            `json:"command"`
+	Args      []string          `json:"args"`
+	Env       map[string]string `json:"env,omitempty"`
+	Reasons   []string          `json:"reasons,omitempty"`
+}
+
 type State struct {
-	Profiles map[string]Profile        `json:"profiles"`
-	Health   map[string]HealthSnapshot `json:"health"`
-	Policies []PolicyRule              `json:"policies"`
-	Leases   map[string]Lease          `json:"leases"`
+	Profiles       map[string]Profile           `json:"profiles"`
+	Health         map[string]HealthSnapshot    `json:"health"`
+	Policies       []PolicyRule                 `json:"policies"`
+	Leases         map[string]Lease             `json:"leases"`
+	SecretBindings map[string]map[string]string `json:"secret_bindings"` // profile_id -> env_var -> secret_key
 }
 
 func NewState() State {
 	return State{
-		Profiles: map[string]Profile{},
-		Health:   map[string]HealthSnapshot{},
-		Policies: []PolicyRule{},
-		Leases:   map[string]Lease{},
+		Profiles:       map[string]Profile{},
+		Health:         map[string]HealthSnapshot{},
+		Policies:       []PolicyRule{},
+		Leases:         map[string]Lease{},
+		SecretBindings: map[string]map[string]string{},
 	}
 }

@@ -28,6 +28,19 @@ func newTestHTTPServer(t *testing.T) (*httptest.Server, *service.Service) {
 	return httptest.NewServer(s.Handler()), svc
 }
 
+func newTestHTTPServerWithAuth(t *testing.T, token string) (*httptest.Server, *service.Service) {
+	t.Helper()
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	st := store.NewFileStore(statePath)
+	svc := service.New(st)
+	if err := svc.Init(context.Background()); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	v := vault.NewFileVault(filepath.Join(t.TempDir(), "vault.enc.json"))
+	s := NewServerWithAuth(svc, v, AuthConfig{BearerToken: token})
+	return httptest.NewServer(s.Handler()), svc
+}
+
 func TestDashboardAndFrontend(t *testing.T) {
 	ts, svc := newTestHTTPServer(t)
 	defer ts.Close()
@@ -84,5 +97,54 @@ func TestRouteCandidatesAPI(t *testing.T) {
 	}
 	if len(plan.Candidates) != 2 {
 		t.Fatalf("expected 2 candidates, got %d", len(plan.Candidates))
+	}
+}
+
+func TestAuthMiddlewareBearer(t *testing.T) {
+	ts, _ := newTestHTTPServerWithAuth(t, "secret-token")
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/v2/dashboard/summary")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without bearer token, got %d", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v2/dashboard/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("authorized request failed: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with bearer token, got %d", resp2.StatusCode)
+	}
+}
+
+func TestIncidentsEndpoint(t *testing.T) {
+	ts, svc := newTestHTTPServer(t)
+	defer ts.Close()
+	ctx := context.Background()
+	_ = svc.AddProfile(ctx, model.Profile{ID: "codex-main", Provider: "openai", Frontend: "codex", AuthMethod: "chatgpt", Protocol: "app_server", Enabled: true})
+	body := `{"profile_id":"codex-main","kind":"rate_limit","message":"429","owner":"test","cooldown_seconds":120}`
+	resp, err := http.Post(ts.URL+"/v2/incidents", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("incident post failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	resp2, err := http.Get(ts.URL + "/v2/incidents?profile_id=codex-main&limit=5")
+	if err != nil {
+		t.Fatalf("incident list failed: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for list, got %d", resp2.StatusCode)
 	}
 }

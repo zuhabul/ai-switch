@@ -11,6 +11,7 @@ OWNER="${AI_SWITCH_OWNER:-wrapper-$(id -un 2>/dev/null || echo user)}"
 REAL_CMD="${AI_SWITCH_REAL_CMD:-}"
 PLATFORM_USE="${AI_SWITCH_PLATFORM_USE:-}"
 LEASE_TTL_MIN="${AI_SWITCH_LEASE_TTL_MIN:-15}"
+API_TOKEN="${AI_SWITCH_API_TOKEN:-${AISWITCHD_API_TOKEN:-}}"
 
 if [[ -z "${FRONTEND}" ]]; then
   echo "AI_SWITCH_FRONTEND is required" >&2
@@ -42,7 +43,12 @@ print(json.dumps({
 PY
 )"
 
-route_json="$(curl -fsS -X POST "${API_BASE}/v2/route" -H 'content-type: application/json' -d "${route_payload}")"
+curl_args=(-fsS)
+if [[ -n "${API_TOKEN}" ]]; then
+  curl_args+=(-H "Authorization: Bearer ${API_TOKEN}")
+fi
+
+route_json="$(curl "${curl_args[@]}" -X POST "${API_BASE}/v2/route" -H 'content-type: application/json' -d "${route_payload}")"
 profile_id="$(python3 - <<PY
 import json
 obj=json.loads('''${route_json}''')
@@ -65,7 +71,7 @@ print(json.dumps({
 }))
 PY
 )"
-lease_json="$(curl -fsS -X POST "${API_BASE}/v2/leases" -H 'content-type: application/json' -d "${lease_payload}")"
+lease_json="$(curl "${curl_args[@]}" -X POST "${API_BASE}/v2/leases" -H 'content-type: application/json' -d "${lease_payload}")"
 lease_id="$(python3 - <<PY
 import json
 obj=json.loads('''${lease_json}''')
@@ -78,7 +84,7 @@ if [[ -z "${lease_id}" ]]; then
 fi
 
 cleanup() {
-  curl -fsS -X DELETE "${API_BASE}/v2/leases?lease_id=${lease_id}" >/dev/null 2>&1 || true
+  curl "${curl_args[@]}" -X DELETE "${API_BASE}/v2/leases?lease_id=${lease_id}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

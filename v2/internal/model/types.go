@@ -9,6 +9,7 @@ type Profile struct {
 	AuthMethod     string    `json:"auth_method"`
 	Protocol       string    `json:"protocol"`
 	Account        string    `json:"account"`
+	OwnerScopes    []string  `json:"owner_scopes,omitempty"`
 	Priority       int       `json:"priority"`
 	Enabled        bool      `json:"enabled"`
 	Tags           []string  `json:"tags,omitempty"`
@@ -68,6 +69,16 @@ type RoutePlan struct {
 	Rejected   []string        `json:"rejected,omitempty"`
 }
 
+type Incident struct {
+	ID              string    `json:"id"`
+	ProfileID       string    `json:"profile_id"`
+	Kind            string    `json:"kind"`
+	Message         string    `json:"message,omitempty"`
+	Owner           string    `json:"owner,omitempty"`
+	CooldownSeconds int       `json:"cooldown_seconds,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
 type RuntimePlanRequest struct {
 	Frontend           string   `json:"frontend"`
 	TaskClass          string   `json:"task_class"`
@@ -109,13 +120,14 @@ type DashboardAccount struct {
 }
 
 type DashboardSummary struct {
-	TimeUTC      time.Time          `json:"time_utc"`
-	Counts       map[string]int     `json:"counts"`
-	Providers    map[string]int     `json:"providers"`
-	Profiles     []DashboardProfile `json:"profiles"`
-	Accounts     []DashboardAccount `json:"accounts"`
-	Policies     []PolicyRule       `json:"policies"`
-	ActiveLeases []Lease            `json:"active_leases"`
+	TimeUTC         time.Time          `json:"time_utc"`
+	Counts          map[string]int     `json:"counts"`
+	Providers       map[string]int     `json:"providers"`
+	Profiles        []DashboardProfile `json:"profiles"`
+	Accounts        []DashboardAccount `json:"accounts"`
+	Policies        []PolicyRule       `json:"policies"`
+	ActiveLeases    []Lease            `json:"active_leases"`
+	RecentIncidents []Incident         `json:"recent_incidents,omitempty"`
 }
 
 type State struct {
@@ -123,6 +135,7 @@ type State struct {
 	Health         map[string]HealthSnapshot    `json:"health"`
 	Policies       []PolicyRule                 `json:"policies"`
 	Leases         map[string]Lease             `json:"leases"`
+	Incidents      []Incident                   `json:"incidents,omitempty"`
 	SecretBindings map[string]map[string]string `json:"secret_bindings"` // profile_id -> env_var -> secret_key
 }
 
@@ -132,6 +145,7 @@ func NewState() State {
 		Health:         map[string]HealthSnapshot{},
 		Policies:       []PolicyRule{},
 		Leases:         map[string]Lease{},
+		Incidents:      []Incident{},
 		SecretBindings: map[string]map[string]string{},
 	}
 }

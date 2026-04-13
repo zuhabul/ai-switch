@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,8 @@ type Service struct {
 	store Store
 	mu    sync.Mutex
 }
+
+const maxIncidentLogEntries = 500
 
 func New(store Store) *Service {
 	return &Service{store: store}
@@ -43,6 +46,7 @@ func (s *Service) AddProfile(ctx context.Context, p model.Profile) error {
 	if err != nil {
 		return err
 	}
+	p = normalizeProfile(p)
 	if err := validateProfile(p); err != nil {
 		return err
 	}
@@ -59,6 +63,7 @@ func (s *Service) UpdateProfile(ctx context.Context, p model.Profile) error {
 	if err != nil {
 		return err
 	}
+	p = normalizeProfile(p)
 	if err := validateProfile(p); err != nil {
 		return err
 	}
@@ -345,6 +350,83 @@ func (s *Service) SetCooldown(ctx context.Context, profileID string, d time.Dura
 	return s.store.Save(state)
 }
 
+func (s *Service) RecordIncident(ctx context.Context, in model.Incident) (model.Incident, error) {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.store.Load()
+	if err != nil {
+		return model.Incident{}, err
+	}
+	if in.ProfileID == "" {
+		return model.Incident{}, fmt.Errorf("profile_id is required")
+	}
+	p, ok := state.Profiles[in.ProfileID]
+	if !ok {
+		return model.Incident{}, fmt.Errorf("unknown profile %s", in.ProfileID)
+	}
+	if in.ID == "" {
+		in.ID = fmt.Sprintf("inc_%d", time.Now().UTC().UnixNano())
+	}
+	if in.CreatedAt.IsZero() {
+		in.CreatedAt = time.Now().UTC()
+	}
+	if in.Kind == "" {
+		in.Kind = "generic"
+	}
+	if in.CooldownSeconds > 0 {
+		p.CooldownUntil = time.Now().UTC().Add(time.Duration(in.CooldownSeconds) * time.Second)
+		state.Profiles[p.ID] = p
+	}
+	if strings.EqualFold(in.Kind, "rate_limit") {
+		h := state.Health[in.ProfileID]
+		h.ProfileID = in.ProfileID
+		h.UpdatedAt = time.Now().UTC()
+		if h.RemainingRequests5Min > 0 {
+			h.RemainingRequests5Min = 0
+		}
+		if h.RemainingRequestsHour > 0 {
+			h.RemainingRequestsHour = max(0, h.RemainingRequestsHour/2)
+		}
+		if h.RecentErrorRatePercent < 5 {
+			h.RecentErrorRatePercent = 5
+		}
+		state.Health[in.ProfileID] = h
+	}
+	state.Incidents = append(state.Incidents, in)
+	if len(state.Incidents) > maxIncidentLogEntries {
+		state.Incidents = slices.Clone(state.Incidents[len(state.Incidents)-maxIncidentLogEntries:])
+	}
+	if err := s.store.Save(state); err != nil {
+		return model.Incident{}, err
+	}
+	return in, nil
+}
+
+func (s *Service) ListIncidents(ctx context.Context, profileID string, limit int) ([]model.Incident, error) {
+	_ = ctx
+	state, err := s.store.Load()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	out := make([]model.Incident, 0, len(state.Incidents))
+	for i := len(state.Incidents) - 1; i >= 0; i-- {
+		it := state.Incidents[i]
+		if profileID != "" && it.ProfileID != profileID {
+			continue
+		}
+		out = append(out, it)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (s *Service) Route(ctx context.Context, req model.TaskRequest) (model.RouteDecision, error) {
 	_ = ctx
 	state, err := s.store.Load()
@@ -412,8 +494,12 @@ func (s *Service) AcquireLease(ctx context.Context, profileID, frontend, owner s
 	if err != nil {
 		return model.Lease{}, err
 	}
-	if _, ok := state.Profiles[profileID]; !ok {
+	p, ok := state.Profiles[profileID]
+	if !ok {
 		return model.Lease{}, fmt.Errorf("unknown profile %s", profileID)
+	}
+	if !ownerAllowed(p.OwnerScopes, owner) {
+		return model.Lease{}, fmt.Errorf("owner %q is not allowed for profile %s", owner, profileID)
 	}
 	now := time.Now().UTC()
 	for id, l := range state.Leases {
@@ -603,6 +689,11 @@ func (s *Service) DashboardSummary(ctx context.Context) (model.DashboardSummary,
 		return 0
 	})
 
+	recentIncidents := make([]model.Incident, 0, 20)
+	for i := len(state.Incidents) - 1; i >= 0 && len(recentIncidents) < 20; i-- {
+		recentIncidents = append(recentIncidents, state.Incidents[i])
+	}
+
 	return model.DashboardSummary{
 		TimeUTC: now,
 		Counts: map[string]int{
@@ -611,12 +702,14 @@ func (s *Service) DashboardSummary(ctx context.Context) (model.DashboardSummary,
 			"policies":      len(state.Policies),
 			"active_leases": len(activeLeases),
 			"providers":     len(providers),
+			"incidents":     len(state.Incidents),
 		},
-		Providers:    providers,
-		Profiles:     dashProfiles,
-		Accounts:     accounts,
-		Policies:     policies,
-		ActiveLeases: activeLeases,
+		Providers:       providers,
+		Profiles:        dashProfiles,
+		Accounts:        accounts,
+		Policies:        policies,
+		ActiveLeases:    activeLeases,
+		RecentIncidents: recentIncidents,
 	}, nil
 }
 
@@ -654,4 +747,43 @@ func validateProfile(p model.Profile) error {
 		return fmt.Errorf("provider/frontend/auth_method/protocol are required")
 	}
 	return nil
+}
+
+func ownerAllowed(ownerScopes []string, owner string) bool {
+	if len(ownerScopes) == 0 {
+		return true
+	}
+	if owner == "" {
+		return false
+	}
+	for _, s := range ownerScopes {
+		if s == "*" || s == owner {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeProfile(p model.Profile) model.Profile {
+	p.ID = strings.TrimSpace(p.ID)
+	p.Provider = strings.TrimSpace(p.Provider)
+	p.Frontend = strings.TrimSpace(p.Frontend)
+	p.AuthMethod = strings.TrimSpace(p.AuthMethod)
+	p.Protocol = strings.TrimSpace(p.Protocol)
+	p.Account = strings.TrimSpace(p.Account)
+	scopes := make([]string, 0, len(p.OwnerScopes))
+	seen := map[string]struct{}{}
+	for _, s := range p.OwnerScopes {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		scopes = append(scopes, s)
+	}
+	p.OwnerScopes = scopes
+	return p
 }

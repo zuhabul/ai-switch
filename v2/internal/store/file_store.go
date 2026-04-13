@@ -51,6 +51,9 @@ func (s *FileStore) Load() (model.State, error) {
 	if state.Policies == nil {
 		state.Policies = []model.PolicyRule{}
 	}
+	if state.Incidents == nil {
+		state.Incidents = []model.Incident{}
+	}
 	return state, nil
 }
 

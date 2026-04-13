@@ -1,8 +1,13 @@
 const $ = (id) => document.getElementById(id);
+let authToken = localStorage.getItem("aiswitch_api_token") || "";
 
 async function api(path, options = {}) {
+  const headers = { "content-type": "application/json", ...(options.headers || {}) };
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
   const res = await fetch(path, {
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
+    headers,
     ...options,
   });
   const text = await res.text();
@@ -60,6 +65,7 @@ function renderStats(summary) {
     ["Providers", counts.providers || 0],
     ["Policies", counts.policies || 0],
     ["Active Leases", counts.active_leases || 0],
+    ["Incidents", counts.incidents || 0],
   ];
   $("stats").innerHTML = stats
     .map(
@@ -91,6 +97,7 @@ async function refreshSummary() {
   renderStats(summary);
   renderProfiles(summary);
   pretty("policy-output", summary.policies || []);
+  pretty("incident-output", summary.recent_incidents || []);
 }
 
 async function refreshSecrets() {
@@ -99,15 +106,29 @@ async function refreshSecrets() {
 }
 
 async function refreshAdapters() {
-  const adapters = await api("v2/adapters");
-  pretty("adapters-output", adapters);
+  const [adapters, contract] = await Promise.all([
+    api("v2/adapters"),
+    api("v2/adapters/contract"),
+  ]);
+  pretty("adapters-output", { adapters, contract });
 }
 
 async function refreshAll() {
-  await Promise.all([refreshSummary(), refreshSecrets(), refreshAdapters()]);
+  await Promise.all([refreshSummary(), refreshSecrets(), refreshAdapters(), refreshIncidents()]);
+}
+
+async function refreshIncidents() {
+  const incidents = await api("v2/incidents?limit=30");
+  pretty("incident-output", incidents);
 }
 
 function bindEvents() {
+  $("api-token").value = authToken;
+  $("save-token").addEventListener("click", async () => {
+    authToken = $("api-token").value.trim();
+    localStorage.setItem("aiswitch_api_token", authToken);
+    await refreshAll().catch((e) => alert(e.message));
+  });
   $("refresh-all").addEventListener("click", () => refreshAll().catch((e) => alert(e.message)));
   $("refresh-adapters").addEventListener("click", () => refreshAdapters().catch((e) => alert(e.message)));
 
@@ -125,6 +146,7 @@ function bindEvents() {
       enabled: fd.get("enabled") === "true",
       budget_daily_usd: Number(fd.get("budget_daily_usd") || 0),
       tags: csv(fd.get("tags")),
+      owner_scopes: csv(fd.get("owner_scopes")),
     };
     try {
       await api("v2/profiles", { method: "POST", body: JSON.stringify(payload) });
@@ -227,6 +249,25 @@ function bindEvents() {
       await refreshSummary();
     } catch (err) {
       flash("policy-flash", err.message, false);
+    }
+  });
+
+  $("incident-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const payload = {
+      profile_id: fd.get("profile_id"),
+      kind: fd.get("kind"),
+      message: fd.get("message"),
+      owner: fd.get("owner"),
+      cooldown_seconds: Number(fd.get("cooldown_seconds") || 0),
+    };
+    try {
+      await api("v2/incidents", { method: "POST", body: JSON.stringify(payload) });
+      flash("incident-flash", "Incident recorded and cooldown applied");
+      await refreshAll();
+    } catch (err) {
+      flash("incident-flash", err.message, false);
     }
   });
 }

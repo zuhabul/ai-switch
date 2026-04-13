@@ -45,3 +45,10 @@ func TestHookRegistryListFrontends(t *testing.T) {
 		t.Fatalf("expected expanded hooks, got %d", len(items))
 	}
 }
+
+func TestDefaultContract(t *testing.T) {
+	spec := DefaultContract()
+	if spec.Version == "" || len(spec.Methods) == 0 {
+		t.Fatalf("expected versioned contract with methods")
+	}
+}

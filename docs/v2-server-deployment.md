@@ -21,13 +21,30 @@ curl -k -fsS https://workspace.zuhabul.com/aiswitch/healthz
 ```bash
 curl -k -fsS https://workspace.zuhabul.com/aiswitch/v2/profiles
 curl -k -fsS https://workspace.zuhabul.com/aiswitch/v2/dashboard/summary
+curl -k -fsS https://workspace.zuhabul.com/aiswitch/v2/adapters/contract
+curl -k -fsS https://workspace.zuhabul.com/aiswitch/metrics
 curl -k -fsS -X POST https://workspace.zuhabul.com/aiswitch/v2/route \
   -H 'content-type: application/json' \
   -d '{"frontend":"codex","task_class":"coding","required_protocol":"app_server"}'
 curl -k -fsS -X POST https://workspace.zuhabul.com/aiswitch/v2/route/candidates \
   -H 'content-type: application/json' \
   -d '{"frontend":"codex","task_class":"coding"}'
+curl -k -fsS -X POST https://workspace.zuhabul.com/aiswitch/v2/incidents \
+  -H 'content-type: application/json' \
+  -d '{"profile_id":"codex-main","kind":"rate_limit","message":"429","owner":"ops","cooldown_seconds":900}'
 ```
+
+## Optional API Authentication
+
+Configure one or both:
+
+- `AISWITCHD_API_TOKEN=...` (Bearer auth)
+- `AISWITCHD_HMAC_KEYS=ops:secret1,bot:secret2` (HMAC headers)
+
+When enabled, `/v2/*` and `/metrics` require:
+
+- `Authorization: Bearer <token>` OR
+- `X-AISWITCH-Key-ID`, `X-AISWITCH-Timestamp`, `X-AISWITCH-Signature`
 
 ## Wrapper Integration
 

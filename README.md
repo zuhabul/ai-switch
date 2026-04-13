@@ -277,6 +277,11 @@ Current `v2` implementation path:
 - Full profile/policy management API (`GET/POST/PUT/DELETE`).
 - Ranked failover routing (`/v2/route/candidates`) for multi-account chains.
 - Runtime planning emits fallback chain in `AI_SWITCH_FAILOVER_PROFILE_IDS`.
+- Incident intake (`/v2/incidents`) with automatic cooldown and rate-limit health degradation.
+- Prometheus-style metrics endpoint at `/metrics`.
+- Optional control-plane authentication:
+  - Bearer token via `--api-token` or `AISWITCHD_API_TOKEN`
+  - HMAC signatures via `--hmac-keys` or `AISWITCHD_HMAC_KEYS` (`key:secret,...`)
 - Expanded adapter capability registry and native hook support for:
   - `codex`, `claude_code`, `gemini_cli`, `opencode`, `openclaw`
   - `qwen_code`, `kimi_cli`, `copilot`, `aider`, `cody_cli`, `continue_cli`
@@ -306,6 +311,14 @@ go run ./cmd/aiswitch profile add --id codex-main --provider openai --frontend c
 go run ./cmd/aiswitch health set --id codex-main --r5m 50 --rh 500 --latency 120 --error 0.2
 go run ./cmd/aiswitch route --frontend codex --task coding --protocol app_server
 go run ./cmd/aiswitchd --addr 127.0.0.1:4417
+```
+
+Secure mode:
+
+```bash
+go run ./cmd/aiswitchd --addr 127.0.0.1:4417 \
+  --api-token "replace-me" \
+  --hmac-keys "ops:supersecret"
 ```
 
 Then open:

@@ -23,7 +23,7 @@ Build a provider-agnostic AI runtime/auth control plane that supports multi-acco
 - [ ] Add secret handles so runtime never logs raw credentials.
 - [ ] Add auth sessions lifecycle tracking (created, rotated, revoked).
 - [ ] Add account lockout and anomaly detection rules.
-- [ ] Add per-profile RBAC owner groups.
+- [x] Add per-profile RBAC owner groups.
 
 ### 3. Provider and CLI Adapters
 - [x] Create built-in capability registry for core providers and frontends.
@@ -53,7 +53,7 @@ Build a provider-agnostic AI runtime/auth control plane that supports multi-acco
 - [x] Add HTTP control API endpoints for profiles, policies, health, route, leases.
 - [x] Add management UX frontend served by `aiswitchd`.
 - [x] Add route candidate endpoint for multi-account failover planning.
-- [ ] Add authentication for control API (mTLS or signed tokens).
+- [x] Add authentication for control API (bearer token and HMAC signed mode).
 - [ ] Add webhooks/events for rate-limit and failover incidents.
 - [ ] Add Hermes/OpenCode/OpenClaw integration bridges.
 - [ ] Add Multica runtime bridge for centralized profile routing.

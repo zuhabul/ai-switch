@@ -215,3 +215,56 @@ func TestDashboardSummary(t *testing.T) {
 		t.Fatalf("expected 1 account aggregation, got %d", len(summary.Accounts))
 	}
 }
+
+func TestRecordIncidentAppliesCooldown(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	_ = svc.AddProfile(ctx, model.Profile{ID: "p1", Provider: "openai", Frontend: "codex", AuthMethod: "chatgpt", Protocol: "app_server", Enabled: true})
+	incident, err := svc.RecordIncident(ctx, model.Incident{
+		ProfileID:       "p1",
+		Kind:            "rate_limit",
+		Message:         "429",
+		CooldownSeconds: 600,
+		Owner:           "tester",
+	})
+	if err != nil {
+		t.Fatalf("record incident failed: %v", err)
+	}
+	if incident.ID == "" {
+		t.Fatalf("incident id missing")
+	}
+	p, err := svc.GetProfile(ctx, "p1")
+	if err != nil {
+		t.Fatalf("get profile failed: %v", err)
+	}
+	if p.CooldownUntil.IsZero() {
+		t.Fatalf("expected cooldown to be set")
+	}
+	items, err := svc.ListIncidents(ctx, "p1", 10)
+	if err != nil {
+		t.Fatalf("list incidents failed: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatalf("expected incidents")
+	}
+}
+
+func TestAcquireLeaseOwnerScope(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	_ = svc.AddProfile(ctx, model.Profile{
+		ID:          "p1",
+		Provider:    "openai",
+		Frontend:    "codex",
+		AuthMethod:  "chatgpt",
+		Protocol:    "app_server",
+		Enabled:     true,
+		OwnerScopes: []string{"multica"},
+	})
+	if _, err := svc.AcquireLease(ctx, "p1", "codex", "other", 5*time.Minute); err == nil {
+		t.Fatalf("expected owner-scope failure")
+	}
+	if _, err := svc.AcquireLease(ctx, "p1", "codex", "multica", 5*time.Minute); err != nil {
+		t.Fatalf("expected allowed owner to lease: %v", err)
+	}
+}

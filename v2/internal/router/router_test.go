@@ -73,3 +73,21 @@ func TestRankReturnsFallbackCandidates(t *testing.T) {
 		t.Fatalf("expected rejected entries for non-matching frontends")
 	}
 }
+
+func TestOwnerScopeFilter(t *testing.T) {
+	now := time.Now().UTC()
+	candidates, rejected := Rank(Input{
+		Now: now,
+		Profiles: []model.Profile{
+			{ID: "restricted", Provider: "openai", Frontend: "codex", Protocol: "app_server", AuthMethod: "chatgpt", Enabled: true, OwnerScopes: []string{"ops"}},
+		},
+		Health:  map[string]model.HealthSnapshot{"restricted": {RemainingRequests5Min: 50, RemainingRequestsHour: 500}},
+		Request: model.TaskRequest{Frontend: "codex", Owner: "multica"},
+	})
+	if len(candidates) != 0 {
+		t.Fatalf("expected no candidates for unauthorized owner")
+	}
+	if len(rejected) == 0 {
+		t.Fatalf("expected rejection reason for owner scope")
+	}
+}

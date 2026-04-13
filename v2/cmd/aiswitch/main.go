@@ -70,6 +70,7 @@ func handleProfile(ctx context.Context, svc *service.Service, args []string) {
 		account := fs.String("account", "", "account label")
 		priority := fs.Int("priority", 0, "priority")
 		tags := fs.String("tags", "", "comma-separated tags")
+		ownerScopes := fs.String("owner-scopes", "", "comma-separated owners/scopes allowed to use this profile")
 		budget := fs.Float64("budget", 0, "daily budget USD")
 		enabled := fs.Bool("enabled", true, "enabled")
 		_ = fs.Parse(args[1:])
@@ -83,6 +84,7 @@ func handleProfile(ctx context.Context, svc *service.Service, args []string) {
 			Priority:       *priority,
 			Enabled:        *enabled,
 			Tags:           splitCSV(*tags),
+			OwnerScopes:    splitCSV(*ownerScopes),
 			BudgetDailyUSD: *budget,
 		}
 		if err := svc.AddProfile(ctx, p); err != nil {
@@ -483,7 +485,7 @@ func usage() {
 Usage:
   aiswitch init
   aiswitch adapters
-  aiswitch profile add --id ID --provider openai --frontend codex --auth chatgpt --protocol app_server [--priority 10]
+  aiswitch profile add --id ID --provider openai --frontend codex --auth chatgpt --protocol app_server [--priority 10] [--owner-scopes multica,ops]
   aiswitch profile list
   aiswitch profile cooldown --id ID --for 30m
   aiswitch policy add --name NAME [--frontends codex] [--allow-providers openai,google]

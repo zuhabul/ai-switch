@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +22,8 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:4417", "listen address")
 	statePath := flag.String("state", defaultStatePath(), "state file path")
 	vaultPath := flag.String("vault", defaultVaultPath(), "vault file path")
+	apiToken := flag.String("api-token", os.Getenv("AISWITCHD_API_TOKEN"), "optional bearer API token for /v2 and /metrics")
+	hmacKeysRaw := flag.String("hmac-keys", os.Getenv("AISWITCHD_HMAC_KEYS"), "optional HMAC keys: key1:secret1,key2:secret2")
 	flag.Parse()
 
 	st := store.NewFileStore(*statePath)
@@ -32,7 +35,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewServer(svc, v).Handler(),
+		Handler:           api.NewServerWithAuth(svc, v, api.AuthConfig{BearerToken: strings.TrimSpace(*apiToken), HMACKeys: parseHMACKeys(*hmacKeysRaw)}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -68,4 +71,30 @@ func defaultVaultPath() string {
 		return ".aiswitch/secrets.enc.json"
 	}
 	return filepath.Join(h, ".config", "ai-switch-v2", "secrets.enc.json")
+}
+
+func parseHMACKeys(raw string) map[string]string {
+	out := map[string]string{}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return out
+	}
+	pairs := strings.Split(raw, ",")
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		parts := strings.SplitN(pair, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		keyID := strings.TrimSpace(parts[0])
+		secret := strings.TrimSpace(parts[1])
+		if keyID == "" || secret == "" {
+			continue
+		}
+		out[keyID] = secret
+	}
+	return out
 }

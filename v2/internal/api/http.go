@@ -3,9 +3,11 @@ package api
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,14 +25,20 @@ type Server struct {
 	vault    *vault.FileVault
 	adapters *adapter.Registry
 	hooks    *adapter.HookRegistry
+	auth     AuthConfig
 }
 
 func NewServer(svc *service.Service, v *vault.FileVault) *Server {
+	return NewServerWithAuth(svc, v, AuthConfig{})
+}
+
+func NewServerWithAuth(svc *service.Service, v *vault.FileVault, auth AuthConfig) *Server {
 	return &Server{
 		svc:      svc,
 		vault:    v,
 		adapters: adapter.NewRegistry(),
 		hooks:    adapter.NewHookRegistry(),
+		auth:     auth,
 	}
 }
 
@@ -48,8 +56,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v2/runtime/plan", s.runtimePlan)
 	mux.HandleFunc("/v2/dashboard/summary", s.dashboardSummary)
 	mux.HandleFunc("/v2/adapters", s.adaptersInfo)
+	mux.HandleFunc("/v2/adapters/contract", s.adaptersContract)
+	mux.HandleFunc("/v2/incidents", s.incidents)
+	mux.HandleFunc("/metrics", s.metrics)
 	mux.HandleFunc("/", s.frontend)
-	return loggingMiddleware(mux)
+	return loggingMiddleware(s.auth.enforce(mux))
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +285,51 @@ func (s *Server) healthUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) incidents(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		profileID := strings.TrimSpace(r.URL.Query().Get("profile_id"))
+		limit := 50
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		items, err := s.svc.ListIncidents(r.Context(), profileID, limit)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost:
+		var req struct {
+			ProfileID       string `json:"profile_id"`
+			Kind            string `json:"kind"`
+			Message         string `json:"message"`
+			Owner           string `json:"owner"`
+			CooldownSeconds int    `json:"cooldown_seconds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, err)
+			return
+		}
+		incident, err := s.svc.RecordIncident(r.Context(), model.Incident{
+			ProfileID:       req.ProfileID,
+			Kind:            req.Kind,
+			Message:         req.Message,
+			Owner:           req.Owner,
+			CooldownSeconds: req.CooldownSeconds,
+		})
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, incident)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) secretBindings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -491,6 +547,49 @@ func (s *Server) adaptersInfo(w http.ResponseWriter, r *http.Request) {
 		"capabilities":      s.adapters.List(),
 		"runtime_frontends": s.hooks.ListFrontends(),
 	})
+}
+
+func (s *Server) adaptersContract(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, adapter.DefaultContract())
+}
+
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	summary, err := s.svc.DashboardSummary(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	lines := []string{
+		"# HELP aiswitch_profiles_total Number of configured profiles.",
+		"# TYPE aiswitch_profiles_total gauge",
+		fmt.Sprintf("aiswitch_profiles_total %d", summary.Counts["profiles"]),
+		"# HELP aiswitch_accounts_total Number of provider account groups.",
+		"# TYPE aiswitch_accounts_total gauge",
+		fmt.Sprintf("aiswitch_accounts_total %d", summary.Counts["accounts"]),
+		"# HELP aiswitch_policies_total Number of active policy rules.",
+		"# TYPE aiswitch_policies_total gauge",
+		fmt.Sprintf("aiswitch_policies_total %d", summary.Counts["policies"]),
+		"# HELP aiswitch_active_leases_total Number of active leases.",
+		"# TYPE aiswitch_active_leases_total gauge",
+		fmt.Sprintf("aiswitch_active_leases_total %d", summary.Counts["active_leases"]),
+		"# HELP aiswitch_incidents_total Number of tracked incidents.",
+		"# TYPE aiswitch_incidents_total gauge",
+		fmt.Sprintf("aiswitch_incidents_total %d", summary.Counts["incidents"]),
+	}
+	for provider, count := range summary.Providers {
+		lines = append(lines, fmt.Sprintf(`aiswitch_provider_profiles_total{provider=%q} %d`, provider, count))
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(strings.Join(lines, "\n") + "\n"))
 }
 
 func (s *Server) frontend(w http.ResponseWriter, r *http.Request) {

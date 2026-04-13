@@ -61,6 +61,10 @@ func Rank(in Input) ([]model.RouteDecision, []string) {
 			rejected = append(rejected, fmt.Sprintf("%s: missing required tags", p.ID))
 			continue
 		}
+		if !ownerAllowed(p.OwnerScopes, in.Request.Owner) {
+			rejected = append(rejected, fmt.Sprintf("%s: owner not in scope", p.ID))
+			continue
+		}
 
 		pol := policy.Evaluate(in.Policies, p, in.Request)
 		if !pol.Allowed {
@@ -124,4 +128,19 @@ func joinReasons(rs []string) string {
 		return "policy denied"
 	}
 	return rs[0]
+}
+
+func ownerAllowed(ownerScopes []string, owner string) bool {
+	if len(ownerScopes) == 0 {
+		return true
+	}
+	if owner == "" {
+		return false
+	}
+	for _, s := range ownerScopes {
+		if s == "*" || s == owner {
+			return true
+		}
+	}
+	return false
 }

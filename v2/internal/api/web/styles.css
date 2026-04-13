@@ -74,6 +74,10 @@ body {
   flex-wrap: wrap;
 }
 
+.hero-actions input {
+  min-width: 220px;
+}
+
 .btn {
   border: 1px solid transparent;
   border-radius: 999px;

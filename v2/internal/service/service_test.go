@@ -335,6 +335,81 @@ func TestAccountRecordsDashboardMerge(t *testing.T) {
 	}
 }
 
+func TestTriggerAccountFailover(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	_ = svc.AddProfile(ctx, model.Profile{
+		ID:         "openai-a-1",
+		Provider:   "openai",
+		Frontend:   "codex",
+		AuthMethod: "chatgpt",
+		Protocol:   "app_server",
+		Account:    "team-a",
+		Enabled:    true,
+	})
+	_ = svc.AddProfile(ctx, model.Profile{
+		ID:         "openai-a-2",
+		Provider:   "openai",
+		Frontend:   "opencode",
+		AuthMethod: "chatgpt",
+		Protocol:   "app_server",
+		Account:    "team-a",
+		Enabled:    true,
+	})
+	if err := svc.UpsertAccount(ctx, model.AccountRecord{
+		Provider:   "openai",
+		Account:    "team-a",
+		Status:     "healthy",
+		AuthMethod: "chatgpt",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+
+	out, err := svc.TriggerAccountFailover(ctx, "openai", "team-a", "dashboard", "manual failover test", 12*time.Minute)
+	if err != nil {
+		t.Fatalf("trigger failover: %v", err)
+	}
+	if out.AffectedProfiles != 2 {
+		t.Fatalf("expected 2 affected profiles, got %+v", out)
+	}
+	if len(out.ProfileIDs) != 2 || len(out.IncidentIDs) != 2 {
+		t.Fatalf("expected profile and incident ids populated, got %+v", out)
+	}
+
+	p1, _ := svc.GetProfile(ctx, "openai-a-1")
+	p2, _ := svc.GetProfile(ctx, "openai-a-2")
+	if p1.CooldownUntil.IsZero() || p2.CooldownUntil.IsZero() {
+		t.Fatalf("expected cooldown on both profiles: p1=%s p2=%s", p1.CooldownUntil, p2.CooldownUntil)
+	}
+	items, err := svc.ListIncidents(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("list incidents: %v", err)
+	}
+	if len(items) < 2 {
+		t.Fatalf("expected incidents to be created, got %d", len(items))
+	}
+	summary, err := svc.DashboardSummary(ctx)
+	if err != nil {
+		t.Fatalf("summary failed: %v", err)
+	}
+	var account model.DashboardAccount
+	found := false
+	for _, a := range summary.Accounts {
+		if a.Provider == "openai" && a.Account == "team-a" {
+			account = a
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected openai/team-a in account summary")
+	}
+	if account.Status != "cooldown" {
+		t.Fatalf("expected status cooldown after failover, got %s", account.Status)
+	}
+}
+
 func TestRecordIncidentAppliesCooldown(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

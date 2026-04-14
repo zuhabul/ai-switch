@@ -164,6 +164,17 @@ type DashboardAccount struct {
 	Notes                  string     `json:"notes,omitempty"`
 }
 
+type AccountFailoverResult struct {
+	Provider         string    `json:"provider"`
+	Account          string    `json:"account"`
+	Owner            string    `json:"owner"`
+	CooldownSeconds  int       `json:"cooldown_seconds"`
+	CooldownUntilUTC time.Time `json:"cooldown_until_utc"`
+	AffectedProfiles int       `json:"affected_profiles"`
+	ProfileIDs       []string  `json:"profile_ids,omitempty"`
+	IncidentIDs      []string  `json:"incident_ids,omitempty"`
+}
+
 type DashboardSummary struct {
 	TimeUTC         time.Time          `json:"time_utc"`
 	Counts          map[string]int     `json:"counts"`

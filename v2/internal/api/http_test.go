@@ -208,3 +208,45 @@ func TestAccountsEndpoint(t *testing.T) {
 		t.Fatalf("unexpected account payload: %+v", items[0])
 	}
 }
+
+func TestAccountFailoverEndpoint(t *testing.T) {
+	ts, svc := newTestHTTPServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	_ = svc.AddProfile(ctx, model.Profile{
+		ID:         "openai-a-1",
+		Provider:   "openai",
+		Frontend:   "codex",
+		AuthMethod: "chatgpt",
+		Protocol:   "app_server",
+		Account:    "team-a",
+		Enabled:    true,
+	})
+	_ = svc.AddProfile(ctx, model.Profile{
+		ID:         "openai-a-2",
+		Provider:   "openai",
+		Frontend:   "opencode",
+		AuthMethod: "chatgpt",
+		Protocol:   "app_server",
+		Account:    "team-a",
+		Enabled:    true,
+	})
+
+	body := `{"provider":"openai","account":"team-a","owner":"dashboard","message":"manual failover","cooldown_seconds":600}`
+	resp, err := http.Post(ts.URL+"/v2/accounts/failover", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("failover post failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	var out model.AccountFailoverResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode failover response failed: %v", err)
+	}
+	if out.AffectedProfiles != 2 {
+		t.Fatalf("expected 2 affected profiles, got %+v", out)
+	}
+}

@@ -77,6 +77,44 @@
             </div>
           </div>
 
+          <div class="split-two telemetry-zone">
+            <div class="panel subpanel">
+              <div class="chart-head">
+                <div>
+                  <h3>Interactive Account Trend</h3>
+                  <p class="subhead">Snapshot timeline chart from live dashboard refresh history.</p>
+                </div>
+                <div class="inline-filters">
+                  <label class="field tiny">
+                    <span>Account</span>
+                    <select id="chart-account-select">
+                      <option value="__aggregate__">all accounts</option>
+                    </select>
+                  </label>
+                  <label class="field tiny">
+                    <span>Metric</span>
+                    <select id="chart-metric-select">
+                      <option value="health">health score</option>
+                      <option value="daily">daily usage %</option>
+                      <option value="monthly">monthly usage %</option>
+                      <option value="rate5">rate remaining /5m</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div class="chart-wrap">
+                <canvas id="trend-canvas" width="860" height="260"></canvas>
+              </div>
+              <div class="chart-meta" id="chart-meta">No trend data yet. Refresh the dashboard to build timeline history.</div>
+            </div>
+
+            <div class="panel subpanel">
+              <h3>SLA Breach Alerts</h3>
+              <p class="subhead">Real-time alert feed for expiry risk, quota pressure, and degraded health.</p>
+              <div id="sla-alerts" class="alerts-list"></div>
+            </div>
+          </div>
+
           <div class="accounts-layout">
             <div class="accounts-grid" id="accounts-grid"></div>
 

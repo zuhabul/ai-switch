@@ -198,6 +198,107 @@ func (s *Service) ListAccountRecords(ctx context.Context) ([]model.AccountRecord
 	return out, nil
 }
 
+func (s *Service) TriggerAccountFailover(ctx context.Context, provider, account, owner, message string, cooldown time.Duration) (model.AccountFailoverResult, error) {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	provider = strings.TrimSpace(provider)
+	account = defaultAccountLabel(strings.TrimSpace(account))
+	owner = strings.TrimSpace(owner)
+	message = strings.TrimSpace(message)
+	if provider == "" {
+		return model.AccountFailoverResult{}, fmt.Errorf("provider is required")
+	}
+	if cooldown <= 0 {
+		cooldown = 15 * time.Minute
+	}
+
+	state, err := s.store.Load()
+	if err != nil {
+		return model.AccountFailoverResult{}, err
+	}
+
+	now := time.Now().UTC()
+	cooldownUntil := now.Add(cooldown)
+	matchedProfiles := make([]string, 0, 8)
+	incidentIDs := make([]string, 0, 8)
+
+	for id, profile := range state.Profiles {
+		if !strings.EqualFold(strings.TrimSpace(profile.Provider), provider) {
+			continue
+		}
+		if !strings.EqualFold(defaultAccountLabel(strings.TrimSpace(profile.Account)), account) {
+			continue
+		}
+		if !profile.Enabled {
+			continue
+		}
+
+		profile.CooldownUntil = cooldownUntil
+		state.Profiles[id] = profile
+		matchedProfiles = append(matchedProfiles, profile.ID)
+
+		incident := model.Incident{
+			ID:              fmt.Sprintf("inc_%d", now.UnixNano()+int64(len(incidentIDs))),
+			ProfileID:       profile.ID,
+			Kind:            "failover",
+			Message:         message,
+			Owner:           owner,
+			CooldownSeconds: int(cooldown.Seconds()),
+			CreatedAt:       now,
+		}
+		if incident.Message == "" {
+			incident.Message = fmt.Sprintf("manual failover activated for %s/%s", provider, account)
+		}
+		state.Incidents = append(state.Incidents, incident)
+		incidentIDs = append(incidentIDs, incident.ID)
+
+		h := state.Health[profile.ID]
+		h.ProfileID = profile.ID
+		h.UpdatedAt = now
+		h.RemainingRequests5Min = 0
+		h.RemainingRequestsHour = max(0, h.RemainingRequestsHour/2)
+		if h.RecentErrorRatePercent < 7 {
+			h.RecentErrorRatePercent = 7
+		}
+		state.Health[profile.ID] = h
+	}
+
+	if len(matchedProfiles) == 0 {
+		return model.AccountFailoverResult{}, fmt.Errorf("no enabled profiles matched %s/%s", provider, account)
+	}
+	if len(state.Incidents) > maxIncidentLogEntries {
+		state.Incidents = slices.Clone(state.Incidents[len(state.Incidents)-maxIncidentLogEntries:])
+	}
+
+	if state.Accounts != nil {
+		key := accountStorageKey(provider, account)
+		if rec, ok := state.Accounts[key]; ok {
+			rec = normalizeAccountRecord(rec)
+			rec.Status = "cooldown"
+			rec.LastCheckedAt = now
+			state.Accounts[key] = rec
+		}
+	}
+
+	if err := s.store.Save(state); err != nil {
+		return model.AccountFailoverResult{}, err
+	}
+
+	slices.Sort(matchedProfiles)
+	return model.AccountFailoverResult{
+		Provider:         provider,
+		Account:          account,
+		Owner:            owner,
+		CooldownSeconds:  int(cooldown.Seconds()),
+		CooldownUntilUTC: cooldownUntil,
+		AffectedProfiles: len(matchedProfiles),
+		ProfileIDs:       matchedProfiles,
+		IncidentIDs:      incidentIDs,
+	}, nil
+}
+
 func (s *Service) AddPolicy(ctx context.Context, rule model.PolicyRule) error {
 	_ = ctx
 	s.mu.Lock()

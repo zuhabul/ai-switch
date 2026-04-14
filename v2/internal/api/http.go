@@ -56,6 +56,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v2/runtime/plan", s.runtimePlan)
 	mux.HandleFunc("/v2/dashboard/summary", s.dashboardSummary)
 	mux.HandleFunc("/v2/accounts", s.accounts)
+	mux.HandleFunc("/v2/accounts/failover", s.accountFailover)
 	mux.HandleFunc("/v2/adapters", s.adaptersInfo)
 	mux.HandleFunc("/v2/adapters/contract", s.adaptersContract)
 	mux.HandleFunc("/v2/incidents", s.incidents)
@@ -586,6 +587,40 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) accountFailover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Provider        string `json:"provider"`
+		Account         string `json:"account"`
+		Owner           string `json:"owner"`
+		Message         string `json:"message"`
+		CooldownSeconds int    `json:"cooldown_seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if strings.TrimSpace(req.Owner) == "" {
+		req.Owner = "dashboard"
+	}
+	result, err := s.svc.TriggerAccountFailover(
+		r.Context(),
+		req.Provider,
+		req.Account,
+		req.Owner,
+		req.Message,
+		time.Duration(req.CooldownSeconds)*time.Second,
+	)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
 }
 
 func (s *Server) adaptersInfo(w http.ResponseWriter, r *http.Request) {

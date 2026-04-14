@@ -1,8 +1,15 @@
 const $ = (id) => document.getElementById(id);
 
+const HISTORY_KEY = "aiswitch_account_history_v2";
+const HISTORY_LIMIT = 140;
+const CHART_ACCOUNT_KEY = "aiswitch_chart_account";
+const CHART_METRIC_KEY = "aiswitch_chart_metric";
+
 let authToken = localStorage.getItem("aiswitch_api_token") || "";
 let toastTimer = null;
 let latestSummary = null;
+let historyCache = loadHistoryCache();
+let chartTrace = null;
 
 function notify(message, ok = true) {
   const el = $("global-toast");
@@ -168,6 +175,311 @@ function accountUsageText(used, limit, remaining) {
   return `${fmtUSD(used)} / ${fmtUSD(limit)} (${fmtUSD(remaining)} left)`;
 }
 
+function loadHistoryCache() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function saveHistoryCache() {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(historyCache));
+}
+
+function pushHistoryPoint(key, point) {
+  if (!historyCache[key]) historyCache[key] = [];
+  historyCache[key].push(point);
+  if (historyCache[key].length > HISTORY_LIMIT) {
+    historyCache[key] = historyCache[key].slice(historyCache[key].length - HISTORY_LIMIT);
+  }
+}
+
+function recordHistory(accounts) {
+  const now = Date.now();
+  let aggHealth = 0;
+  let aggDaily = 0;
+  let aggMonthly = 0;
+  let aggRate5 = 0;
+  let count = 0;
+
+  for (const account of accounts) {
+    const point = {
+      t: now,
+      health: toNumber(account.health_score, 0),
+      daily: toNumber(account.daily_usage_percent, 0),
+      monthly: toNumber(account.monthly_usage_percent, 0),
+      rate5: toNumber(account.rate_limit_remaining_5min, 0),
+    };
+    pushHistoryPoint(accountKey(account.provider, account.account), point);
+    aggHealth += point.health;
+    aggDaily += point.daily;
+    aggMonthly += point.monthly;
+    aggRate5 += point.rate5;
+    count++;
+  }
+
+  if (count > 0) {
+    pushHistoryPoint("__aggregate__", {
+      t: now,
+      health: aggHealth / count,
+      daily: aggDaily / count,
+      monthly: aggMonthly / count,
+      rate5: aggRate5 / count,
+    });
+  }
+
+  saveHistoryCache();
+}
+
+function metricInfo(metric) {
+  switch (metric) {
+    case "daily":
+      return { label: "Daily Usage", unit: "%", color: "#31e8c0" };
+    case "monthly":
+      return { label: "Monthly Usage", unit: "%", color: "#ffc978" };
+    case "rate5":
+      return { label: "Rate Remaining /5m", unit: "", color: "#3fd8ff" };
+    case "health":
+    default:
+      return { label: "Health Score", unit: "", color: "#9ff5ba" };
+  }
+}
+
+function getChartSeries() {
+  const select = $("chart-account-select");
+  const metricSelect = $("chart-metric-select");
+  const key = select?.value || "__aggregate__";
+  const metric = metricSelect?.value || "health";
+  const source = historyCache[key] || [];
+  const series = source.slice(-80).map((point) => ({
+    t: point.t,
+    v: toNumber(point[metric], 0),
+  }));
+  return { key, metric, series };
+}
+
+function updateChartAccountOptions(accounts) {
+  const select = $("chart-account-select");
+  if (!select) return;
+
+  const current = localStorage.getItem(CHART_ACCOUNT_KEY) || select.value || "__aggregate__";
+  const options = ["__aggregate__", ...accounts.map((a) => accountKey(a.provider, a.account))];
+  const unique = [...new Set(options)].sort();
+
+  select.innerHTML = unique
+    .map((key) => {
+      if (key === "__aggregate__") return `<option value="__aggregate__">all accounts</option>`;
+      return `<option value="${key}">${key}</option>`;
+    })
+    .join("");
+
+  select.value = unique.includes(current) ? current : "__aggregate__";
+  localStorage.setItem(CHART_ACCOUNT_KEY, select.value);
+}
+
+function drawTrendChart() {
+  const canvas = $("trend-canvas");
+  const meta = $("chart-meta");
+  if (!canvas || !meta) return;
+
+  const { key, metric, series } = getChartSeries();
+  const info = metricInfo(metric);
+
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 860;
+  const cssH = canvas.clientHeight || 260;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  ctx.clearRect(0, 0, cssW, cssH);
+  ctx.fillStyle = "rgba(7,20,34,0.96)";
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  if (series.length < 2) {
+    ctx.fillStyle = "#9bb5cc";
+    ctx.font = "13px Sora";
+    ctx.fillText("Not enough history yet. Keep refreshing to build a timeline.", 16, 28);
+    meta.textContent = `${info.label}: waiting for timeline points.`;
+    chartTrace = null;
+    return;
+  }
+
+  const minRaw = Math.min(...series.map((p) => p.v));
+  const maxRaw = Math.max(...series.map((p) => p.v));
+  const min = minRaw === maxRaw ? minRaw - 1 : minRaw;
+  const max = minRaw === maxRaw ? maxRaw + 1 : maxRaw;
+  const pad = { left: 42, right: 14, top: 12, bottom: 28 };
+  const w = cssW - pad.left - pad.right;
+  const h = cssH - pad.top - pad.bottom;
+
+  ctx.strokeStyle = "rgba(112, 192, 242, 0.18)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (h * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(cssW - pad.right, y);
+    ctx.stroke();
+  }
+
+  const points = series.map((p, idx) => {
+    const x = pad.left + (idx * w) / (series.length - 1);
+    const ratio = (p.v - min) / (max - min);
+    const y = pad.top + h - ratio * h;
+    return { ...p, x, y };
+  });
+
+  ctx.lineWidth = 2.2;
+  ctx.strokeStyle = info.color;
+  ctx.beginPath();
+  points.forEach((point, i) => {
+    if (i === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
+  ctx.stroke();
+
+  ctx.fillStyle = info.color;
+  points.forEach((point) => {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 2.3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.fillStyle = "#9bb5cc";
+  ctx.font = "12px Sora";
+  ctx.fillText(`${max.toFixed(1)}${info.unit}`, 6, pad.top + 6);
+  ctx.fillText(`${min.toFixed(1)}${info.unit}`, 6, pad.top + h + 4);
+
+  const latest = points[points.length - 1];
+  meta.textContent = `${info.label} (${key}): ${latest.v.toFixed(2)}${info.unit} | ${new Date(latest.t).toLocaleTimeString()}`;
+
+  chartTrace = { points, info, pad, w, h, cssW, cssH };
+}
+
+function updateChartHover(clientX) {
+  const canvas = $("trend-canvas");
+  const meta = $("chart-meta");
+  if (!canvas || !meta || !chartTrace || !chartTrace.points?.length) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  let best = chartTrace.points[0];
+  let bestDistance = Math.abs(best.x - x);
+  for (const point of chartTrace.points) {
+    const dist = Math.abs(point.x - x);
+    if (dist < bestDistance) {
+      best = point;
+      bestDistance = dist;
+    }
+  }
+  const ts = new Date(best.t).toLocaleString();
+  meta.textContent = `${chartTrace.info.label}: ${best.v.toFixed(2)}${chartTrace.info.unit} at ${ts}`;
+}
+
+function accountAlertSeverity(alerts) {
+  if (alerts.some((a) => a.severity === "critical")) return "critical";
+  return "warn";
+}
+
+function buildSLAAlerts(accounts) {
+  const now = Date.now();
+  const grouped = new Map();
+
+  const add = (account, severity, message) => {
+    const key = accountKey(account.provider, account.account);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        account,
+        messages: [],
+        severity,
+      });
+    }
+    const entry = grouped.get(key);
+    entry.messages.push({ severity, message });
+    if (severity === "critical") entry.severity = "critical";
+  };
+
+  for (const account of accounts) {
+    const status = statusClass(account.status);
+    if (status === "cooldown" || status === "disabled") {
+      add(account, "critical", `status is ${status}`);
+    } else if (status === "degraded") {
+      add(account, "warn", "status is degraded");
+    }
+
+    const daily = toNumber(account.daily_usage_percent, 0);
+    if (daily >= 90) add(account, "critical", `daily usage ${daily.toFixed(1)}%`);
+    else if (daily >= 75) add(account, "warn", `daily usage ${daily.toFixed(1)}%`);
+
+    const monthly = toNumber(account.monthly_usage_percent, 0);
+    if (monthly >= 90) add(account, "critical", `monthly usage ${monthly.toFixed(1)}%`);
+    else if (monthly >= 75) add(account, "warn", `monthly usage ${monthly.toFixed(1)}%`);
+
+    const health = toNumber(account.health_score, 0);
+    if (health > 0 && health < 65) add(account, "critical", `health score ${health.toFixed(1)}`);
+    else if (health > 0 && health < 80) add(account, "warn", `health score ${health.toFixed(1)}`);
+
+    const rate5 = toNumber(account.rate_limit_remaining_5min, -1);
+    if (rate5 >= 0 && rate5 <= 5) add(account, "critical", `remaining /5m ${rate5}`);
+    else if (rate5 > 5 && rate5 <= 20) add(account, "warn", `remaining /5m ${rate5}`);
+
+    if (account.auth_expires_at) {
+      const exp = new Date(account.auth_expires_at).getTime();
+      if (Number.isFinite(exp)) {
+        const hours = (exp - now) / 3600000;
+        if (hours <= 6) add(account, "critical", `auth expires ${fmtRelative(account.auth_expires_at)}`);
+        else if (hours <= 24) add(account, "warn", `auth expires ${fmtRelative(account.auth_expires_at)}`);
+      }
+    }
+  }
+
+  const alerts = Array.from(grouped.values()).map((item) => ({
+    ...item,
+    severity: accountAlertSeverity(item.messages),
+  }));
+
+  alerts.sort((a, b) => {
+    if (a.severity !== b.severity) return a.severity === "critical" ? -1 : 1;
+    return `${a.account.provider}/${a.account.account}`.localeCompare(`${b.account.provider}/${b.account.account}`);
+  });
+  return alerts;
+}
+
+function renderSLAAlerts(accounts) {
+  const wrap = $("sla-alerts");
+  if (!wrap) return;
+  const alerts = buildSLAAlerts(accounts);
+  if (!alerts.length) {
+    wrap.innerHTML = `<div class="alert-card"><div class="alert-title">No active SLA alerts</div><div class="alert-body">All tracked accounts are currently within configured risk thresholds.</div></div>`;
+    return;
+  }
+
+  wrap.innerHTML = alerts
+    .map((entry) => {
+      const account = entry.account;
+      const key = accountKey(account.provider, account.account);
+      return `<article class="alert-card ${entry.severity}">
+        <div class="alert-top">
+          <div class="alert-title">${account.provider}/${account.account}</div>
+          <div class="alert-sev">${entry.severity}</div>
+        </div>
+        <div class="alert-body">${entry.messages.map((m) => m.message).join(" | ")}</div>
+        <div class="alert-actions">
+          <button class="btn btn-muted btn-compact" type="button" data-load-account="${key}">Edit</button>
+          <button class="btn btn-warm btn-compact" type="button" data-failover-account="${account.provider}::${account.account}">Failover 15m</button>
+        </div>
+      </article>`;
+    })
+    .join("");
+}
+
 function renderStats(summary) {
   const counts = summary.counts || {};
   const accounts = summary.accounts || [];
@@ -182,17 +494,21 @@ function renderStats(summary) {
     ["High Pressure", highPressure],
   ];
   const stats = $("stats");
-  stats.innerHTML = cards
-    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
-    .join("");
+  if (stats) {
+    stats.innerHTML = cards
+      .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
+      .join("");
+  }
   const updated = summary.time_utc ? new Date(summary.time_utc) : new Date();
   $("as-of").textContent = updated.toLocaleString();
 
   const providers = Object.entries(summary.providers || {}).sort((a, b) => a[0].localeCompare(b[0]));
   const providerStrip = $("providers-strip");
-  providerStrip.innerHTML = providers
-    .map(([name, count]) => `<span class="provider-pill">${name}<strong>${count}</strong></span>`)
-    .join("");
+  if (providerStrip) {
+    providerStrip.innerHTML = providers
+      .map(([name, count]) => `<span class="provider-pill">${name}<strong>${count}</strong></span>`)
+      .join("");
+  }
 }
 
 function updateProviderFilterOptions(accounts) {
@@ -224,6 +540,8 @@ function renderAccounts(summary) {
   const list = filteredAccounts(accounts);
 
   const grid = $("accounts-grid");
+  if (!grid) return;
+
   if (!list.length) {
     grid.innerHTML = `<article class="account-card"><strong>No accounts found for current filter.</strong><span class="subhead">Create telemetry in the editor to onboard a provider account.</span></article>`;
   } else {
@@ -251,19 +569,20 @@ function renderAccounts(summary) {
 
             <div class="usage">
               <div class="k">Daily Usage ${dailyUsage.toFixed(1)}%</div>
-              <div class="bar ${usageBarClass(dailyUsage).replace("bar ", "")}"><i style="width:${Math.min(100, dailyUsage)}%"></i></div>
+              <div class="${usageBarClass(dailyUsage)}"><i style="width:${Math.min(100, dailyUsage)}%"></i></div>
               <div class="subhead">${accountUsageText(account.daily_used_usd, account.daily_limit_usd, account.daily_remaining_usd)}</div>
             </div>
 
             <div class="usage">
               <div class="k">Monthly Usage ${monthlyUsage.toFixed(1)}%</div>
-              <div class="bar ${usageBarClass(monthlyUsage).replace("bar ", "")}"><i style="width:${Math.min(100, monthlyUsage)}%"></i></div>
+              <div class="${usageBarClass(monthlyUsage)}"><i style="width:${Math.min(100, monthlyUsage)}%"></i></div>
               <div class="subhead">${accountUsageText(account.monthly_used_usd, account.monthly_limit_usd, account.monthly_remaining_usd)}</div>
             </div>
 
             <div class="account-actions">
-              <button class="btn btn-muted" type="button" data-load-account="${accountKey(account.provider, account.account)}">Edit</button>
-              <button class="btn btn-danger" type="button" data-delete-account="${account.provider}::${account.account}">Delete</button>
+              <button class="btn btn-muted btn-compact" type="button" data-load-account="${accountKey(account.provider, account.account)}">Edit</button>
+              <button class="btn btn-warm btn-compact" type="button" data-failover-account="${account.provider}::${account.account}">Failover 15m</button>
+              <button class="btn btn-danger btn-compact" type="button" data-delete-account="${account.provider}::${account.account}">Delete</button>
             </div>
           </article>`;
       })
@@ -271,34 +590,43 @@ function renderAccounts(summary) {
   }
 
   const tableBody = $("accounts-table-body");
-  tableBody.innerHTML = list
-    .map((account) => {
-      const status = statusClass(account.status);
-      return `<tr>
-        <td>${account.provider}</td>
-        <td class="mono">${account.account}</td>
-        <td><span class="status ${status}">${status}</span></td>
-        <td>${account.profile_count || 0}</td>
-        <td>${toNumber(account.health_score, 0).toFixed(1)}</td>
-        <td title="${fmtDate(account.auth_expires_at)}">${fmtRelative(account.auth_expires_at)}</td>
-        <td>${toNumber(account.daily_usage_percent, 0).toFixed(1)}%</td>
-        <td>${toNumber(account.monthly_usage_percent, 0).toFixed(1)}%</td>
-        <td>${toNumber(account.rate_limit_remaining_5min, 0)} / ${toNumber(account.rate_limit_remaining_hour, 0)}</td>
-        <td>
-          <button class="btn btn-muted" type="button" data-load-account="${accountKey(account.provider, account.account)}">Edit</button>
-          <button class="btn btn-danger" type="button" data-delete-account="${account.provider}::${account.account}">Delete</button>
-        </td>
-      </tr>`;
-    })
-    .join("");
+  if (tableBody) {
+    tableBody.innerHTML = list
+      .map((account) => {
+        const status = statusClass(account.status);
+        return `<tr>
+          <td>${account.provider}</td>
+          <td class="mono">${account.account}</td>
+          <td><span class="status ${status}">${status}</span></td>
+          <td>${account.profile_count || 0}</td>
+          <td>${toNumber(account.health_score, 0).toFixed(1)}</td>
+          <td title="${fmtDate(account.auth_expires_at)}">${fmtRelative(account.auth_expires_at)}</td>
+          <td>${toNumber(account.daily_usage_percent, 0).toFixed(1)}%</td>
+          <td>${toNumber(account.monthly_usage_percent, 0).toFixed(1)}%</td>
+          <td>${toNumber(account.rate_limit_remaining_5min, 0)} / ${toNumber(account.rate_limit_remaining_hour, 0)}</td>
+          <td>
+            <button class="btn btn-muted btn-compact" type="button" data-load-account="${accountKey(account.provider, account.account)}">Edit</button>
+            <button class="btn btn-warm btn-compact" type="button" data-failover-account="${account.provider}::${account.account}">Failover</button>
+            <button class="btn btn-danger btn-compact" type="button" data-delete-account="${account.provider}::${account.account}">Delete</button>
+          </td>
+        </tr>`;
+      })
+      .join("");
 
-  if (!tableBody.innerHTML.trim()) {
-    tableBody.innerHTML = `<tr><td colspan="10">No account telemetry available.</td></tr>`;
+    if (!tableBody.innerHTML.trim()) {
+      tableBody.innerHTML = `<tr><td colspan="10">No account telemetry available.</td></tr>`;
+    }
   }
+
+  renderSLAAlerts(accounts);
+  updateChartAccountOptions(accounts);
+  recordHistory(accounts);
+  drawTrendChart();
 }
 
 function renderProfiles(summary) {
   const body = $("profiles-body");
+  if (!body) return;
   const rows = (summary.profiles || []).map((entry) => {
     const profile = entry.profile || {};
     return `<tr>
@@ -309,7 +637,7 @@ function renderProfiles(summary) {
       <td>${profile.priority ?? "-"}</td>
       <td>${leasePill(entry)}</td>
       <td>${healthPill(entry)}</td>
-      <td><button class="btn btn-danger" type="button" data-delete-profile="${profile.id}">Delete</button></td>
+      <td><button class="btn btn-danger btn-compact" type="button" data-delete-profile="${profile.id}">Delete</button></td>
     </tr>`;
   });
   body.innerHTML = rows.join("") || `<tr><td colspan="8">No profiles configured.</td></tr>`;
@@ -342,6 +670,21 @@ function populateAccountForm(account) {
   form.rate_limit_remaining_hour.value = toNumber(account.rate_limit_remaining_hour, 0);
   form.tags.value = Array.isArray(account.tags) ? account.tags.join(",") : "";
   form.notes.value = account.notes || "";
+}
+
+async function runAccountFailover(provider, account, cooldownSeconds = 900) {
+  const payload = {
+    provider,
+    account,
+    owner: "dashboard",
+    cooldown_seconds: cooldownSeconds,
+    message: "manual failover triggered from account control tower",
+  };
+  const out = await api("v2/accounts/failover", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return out;
 }
 
 async function refreshSummary() {
@@ -401,9 +744,9 @@ function bindEvents() {
   const tokenInput = $("api-token");
   const saveTokenBtn = $("save-token");
 
-  tokenInput.value = authToken;
+  if (tokenInput) tokenInput.value = authToken;
 
-  saveTokenBtn.addEventListener("click", async () => {
+  saveTokenBtn?.addEventListener("click", async () => {
     setButtonLoading(saveTokenBtn, true, "Save Token");
     try {
       authToken = tokenInput.value.trim();
@@ -421,7 +764,7 @@ function bindEvents() {
     }
   });
 
-  $("refresh-all").addEventListener("click", async (e) => {
+  $("refresh-all")?.addEventListener("click", async (e) => {
     const button = e.currentTarget;
     setButtonLoading(button, true, "Refresh All");
     try {
@@ -434,7 +777,7 @@ function bindEvents() {
     }
   });
 
-  $("refresh-adapters").addEventListener("click", async (e) => {
+  $("refresh-adapters")?.addEventListener("click", async (e) => {
     const button = e.currentTarget;
     setButtonLoading(button, true, "Refresh Adapters");
     try {
@@ -447,14 +790,37 @@ function bindEvents() {
     }
   });
 
-  $("account-filter-provider").addEventListener("change", () => {
+  $("account-filter-provider")?.addEventListener("change", () => {
     if (latestSummary) renderAccounts(latestSummary);
   });
-  $("account-filter-status").addEventListener("change", () => {
+  $("account-filter-status")?.addEventListener("change", () => {
     if (latestSummary) renderAccounts(latestSummary);
   });
 
-  $("account-form").addEventListener("submit", async (e) => {
+  $("chart-account-select")?.addEventListener("change", (e) => {
+    localStorage.setItem(CHART_ACCOUNT_KEY, e.currentTarget.value);
+    drawTrendChart();
+  });
+  $("chart-metric-select")?.addEventListener("change", (e) => {
+    localStorage.setItem(CHART_METRIC_KEY, e.currentTarget.value);
+    drawTrendChart();
+  });
+
+  const chartMetric = localStorage.getItem(CHART_METRIC_KEY);
+  if (chartMetric && $("chart-metric-select")) {
+    $("chart-metric-select").value = chartMetric;
+  }
+
+  $("trend-canvas")?.addEventListener("mousemove", (e) => updateChartHover(e.clientX));
+  $("trend-canvas")?.addEventListener("mouseleave", () => {
+    if (latestSummary) {
+      const { metric, key } = getChartSeries();
+      const info = metricInfo(metric);
+      $("chart-meta").textContent = `${info.label} (${key}) trend ready.`;
+    }
+  });
+
+  $("account-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
@@ -512,6 +878,21 @@ function bindEvents() {
       return;
     }
 
+    const failoverRaw = e.target?.dataset?.failoverAccount;
+    if (failoverRaw) {
+      const [provider, account] = failoverRaw.split("::");
+      if (!provider || !account) return;
+      if (!window.confirm(`Trigger 15m failover cooldown for ${provider}/${account}?`)) return;
+      try {
+        const out = await runAccountFailover(provider, account, 900);
+        notify(`Failover applied to ${out.affected_profiles} profiles (${provider}/${account}).`);
+        await refreshAll();
+      } catch (err) {
+        notify(err.message, false);
+      }
+      return;
+    }
+
     const deleteRaw = e.target?.dataset?.deleteAccount;
     if (!deleteRaw) return;
     const [provider, account] = deleteRaw.split("::");
@@ -529,10 +910,11 @@ function bindEvents() {
     }
   };
 
-  $("accounts-grid").addEventListener("click", accountActionHandler);
-  $("accounts-table-body").addEventListener("click", accountActionHandler);
+  $("accounts-grid")?.addEventListener("click", accountActionHandler);
+  $("accounts-table-body")?.addEventListener("click", accountActionHandler);
+  $("sla-alerts")?.addEventListener("click", accountActionHandler);
 
-  $("profile-form").addEventListener("submit", async (e) => {
+  $("profile-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
@@ -567,7 +949,7 @@ function bindEvents() {
     }
   });
 
-  $("profiles-body").addEventListener("click", async (e) => {
+  $("profiles-body")?.addEventListener("click", async (e) => {
     const id = e.target?.dataset?.deleteProfile;
     if (!id) return;
     if (!window.confirm(`Delete profile ${id}?`)) return;
@@ -580,7 +962,7 @@ function bindEvents() {
     }
   });
 
-  $("route-form").addEventListener("submit", async (e) => {
+  $("route-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
@@ -607,7 +989,7 @@ function bindEvents() {
     }
   });
 
-  $("secret-form").addEventListener("submit", async (e) => {
+  $("secret-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
@@ -630,7 +1012,7 @@ function bindEvents() {
     }
   });
 
-  $("binding-form").addEventListener("submit", async (e) => {
+  $("binding-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
@@ -657,7 +1039,7 @@ function bindEvents() {
     }
   });
 
-  $("policy-form").addEventListener("submit", async (e) => {
+  $("policy-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
@@ -689,7 +1071,7 @@ function bindEvents() {
     }
   });
 
-  $("incident-form").addEventListener("submit", async (e) => {
+  $("incident-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);

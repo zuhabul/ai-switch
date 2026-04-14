@@ -3,309 +3,366 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Switch Command Center</title>
+    <title>AI Switch Enterprise Dashboard</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="noise" aria-hidden="true"></div>
-    <div class="glow glow-a" aria-hidden="true"></div>
-    <div class="glow glow-b" aria-hidden="true"></div>
+    <div class="app-bg" aria-hidden="true"></div>
 
-    <div class="app-shell">
-      <header class="panel hero" id="overview">
-        <div class="hero-copy">
-          <p class="kicker">AI Switch v2</p>
-          <h1>Multi-Account Provider Control Tower</h1>
-          <p>
-            Run every provider account as a managed production asset. Track auth expiry, quota windows,
-            spend burn, and failover readiness from one ultra-advanced dashboard.
-          </p>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">AI Switch Enterprise</p>
+          <h1>Control Center</h1>
+          <p>Professional multi-provider operations for account telemetry, limits, failover, and governance.</p>
         </div>
 
-        <div class="hero-actions">
-          <label class="field token" for="api-token">
-            <span>Bearer Token</span>
-            <input id="api-token" type="password" placeholder="Optional bearer token" autocomplete="off" />
-          </label>
-          <div class="hero-buttons">
-            <button class="btn btn-muted" id="save-token" type="button">Save Token</button>
-            <button class="btn" id="refresh-all" type="button">Refresh All</button>
-            <button class="btn btn-warm" id="refresh-adapters" type="button">Refresh Adapters</button>
-          </div>
-          <div class="sync-row">
-            <span class="sync-label">Last Sync</span>
-            <strong id="as-of">Waiting for refresh...</strong>
-          </div>
+        <nav class="nav" aria-label="Main Navigation">
+          <a href="#overview" data-page-link="overview" class="nav-link">Overview</a>
+          <a href="#accounts" data-page-link="accounts" class="nav-link">Accounts</a>
+          <a href="#providers" data-page-link="providers" class="nav-link">Providers</a>
+          <a href="#analytics" data-page-link="analytics" class="nav-link">Analytics</a>
+          <a href="#routing" data-page-link="routing" class="nav-link">Routing</a>
+          <a href="#governance" data-page-link="governance" class="nav-link">Governance</a>
+          <a href="#reliability" data-page-link="reliability" class="nav-link">Reliability</a>
+          <a href="#capabilities" data-page-link="capabilities" class="nav-link">Capabilities</a>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div><span>Profiles</span><strong id="sidebar-profiles">0</strong></div>
+          <div><span>Accounts</span><strong id="sidebar-accounts">0</strong></div>
+          <div><span>Providers</span><strong id="sidebar-providers">0</strong></div>
+          <div><span>Incidents</span><strong id="sidebar-incidents">0</strong></div>
         </div>
+      </aside>
 
-        <div class="overview-metrics" id="stats"></div>
-        <div class="provider-strip" id="providers-strip"></div>
-      </header>
-
-      <nav class="panel section-nav" aria-label="Section Navigation">
-        <a href="#accounts">Accounts</a>
-        <a href="#profiles">Profiles</a>
-        <a href="#routing">Routing</a>
-        <a href="#governance">Governance</a>
-      </nav>
-
-      <main class="workspace">
-        <section class="panel section" id="accounts">
-          <div class="section-head">
-            <div>
-              <h2>Account Command Center</h2>
-              <p>Provider-level account reliability board with limits, resets, and auth expiry telemetry.</p>
-            </div>
-            <div class="inline-filters">
-              <label class="field tiny">
-                <span>Filter Provider</span>
-                <select id="account-filter-provider">
-                  <option value="all">all</option>
-                </select>
-              </label>
-              <label class="field tiny">
-                <span>Filter Status</span>
-                <select id="account-filter-status">
-                  <option value="all">all</option>
-                  <option value="healthy">healthy</option>
-                  <option value="degraded">degraded</option>
-                  <option value="cooldown">cooldown</option>
-                  <option value="standby">standby</option>
-                  <option value="disabled">disabled</option>
-                </select>
-              </label>
-            </div>
+      <div class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Operations Workspace</p>
+            <h2 id="current-page-title">Overview</h2>
+            <p id="as-of">Waiting for refresh...</p>
           </div>
 
-          <div class="split-two telemetry-zone">
-            <div class="panel subpanel">
-              <div class="chart-head">
+          <div class="topbar-controls">
+            <label class="field token" for="api-token">
+              <span>Bearer Token</span>
+              <input id="api-token" type="password" placeholder="Optional bearer token" autocomplete="off" />
+            </label>
+            <div class="button-row">
+              <button class="btn btn-muted" id="save-token" type="button">Save Token</button>
+              <button class="btn" id="refresh-all" type="button">Refresh All</button>
+              <button class="btn btn-warm" id="refresh-adapters" type="button">Refresh Adapters</button>
+            </div>
+          </div>
+        </header>
+
+        <main class="pages">
+          <section class="page active" data-page="overview">
+            <div class="panel">
+              <div class="section-head">
                 <div>
-                  <h3>Interactive Account Trend</h3>
-                  <p class="subhead">Snapshot timeline chart from live dashboard refresh history.</p>
+                  <h3>Executive Overview</h3>
+                  <p>Real-time command summary across all providers and account pools.</p>
+                </div>
+              </div>
+              <div class="stat-grid" id="stats"></div>
+              <div class="pill-row" id="providers-strip"></div>
+            </div>
+
+            <div class="two-col">
+              <article class="panel">
+                <h4>Provider Posture</h4>
+                <div id="overview-provider-board" class="provider-board"></div>
+              </article>
+              <article class="panel">
+                <h4>Priority SLA Alerts</h4>
+                <div id="overview-alerts" class="alerts-list"></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="page" data-page="accounts">
+            <div class="panel">
+              <div class="section-head">
+                <div>
+                  <h3>Multi-Account Manager</h3>
+                  <p>Manage account status, auth expiry, 5-hour and weekly limits, and spend thresholds.</p>
                 </div>
                 <div class="inline-filters">
                   <label class="field tiny">
-                    <span>Account</span>
-                    <select id="chart-account-select">
-                      <option value="__aggregate__">all accounts</option>
-                    </select>
+                    <span>Provider</span>
+                    <select id="account-filter-provider"><option value="all">all</option></select>
                   </label>
                   <label class="field tiny">
-                    <span>Metric</span>
-                    <select id="chart-metric-select">
-                      <option value="health">health score</option>
-                      <option value="daily">daily usage %</option>
-                      <option value="monthly">monthly usage %</option>
-                      <option value="rate5">rate remaining /5m</option>
+                    <span>Status</span>
+                    <select id="account-filter-status">
+                      <option value="all">all</option>
+                      <option value="healthy">healthy</option>
+                      <option value="degraded">degraded</option>
+                      <option value="cooldown">cooldown</option>
+                      <option value="standby">standby</option>
+                      <option value="disabled">disabled</option>
                     </select>
                   </label>
                 </div>
               </div>
-              <div class="chart-wrap">
-                <canvas id="trend-canvas" width="860" height="260"></canvas>
+
+              <div class="account-grid" id="accounts-grid"></div>
+
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Provider</th>
+                      <th>Account</th>
+                      <th>Status</th>
+                      <th>Profiles</th>
+                      <th>Health</th>
+                      <th>Auth Expiry</th>
+                      <th>5h Usage</th>
+                      <th>Weekly Usage</th>
+                      <th>Monthly Usage</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="accounts-table-body"></tbody>
+                </table>
               </div>
-              <div class="chart-meta" id="chart-meta">No trend data yet. Refresh the dashboard to build timeline history.</div>
             </div>
 
-            <div class="panel subpanel">
-              <h3>SLA Breach Alerts</h3>
-              <p class="subhead">Real-time alert feed for expiry risk, quota pressure, and degraded health.</p>
-              <div id="sla-alerts" class="alerts-list"></div>
+            <div class="two-col">
+              <article class="panel">
+                <h4>Account Telemetry Editor</h4>
+                <form id="account-form" class="form-grid">
+                  <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
+                  <div><label>Account</label><input name="account" required placeholder="team-primary" /></div>
+                  <div><label>Status</label><select name="status"><option value="healthy">healthy</option><option value="degraded">degraded</option><option value="cooldown">cooldown</option><option value="standby">standby</option><option value="disabled">disabled</option></select></div>
+                  <div><label>Tier</label><input name="tier" placeholder="enterprise" /></div>
+                  <div><label>Auth Method</label><input name="auth_method" placeholder="chatgpt" /></div>
+                  <div><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
+
+                  <div><label>Auth Expires At</label><input name="auth_expires_at" type="datetime-local" /></div>
+                  <div><label>Daily Reset</label><input name="daily_reset_at" type="datetime-local" /></div>
+                  <div><label>Weekly Reset</label><input name="weekly_reset_at" type="datetime-local" /></div>
+                  <div><label>Monthly Reset</label><input name="monthly_reset_at" type="datetime-local" /></div>
+                  <div><label>5h Window Reset</label><input name="five_hour_window_reset_at" type="datetime-local" /></div>
+                  <div><label>Rate Reset</label><input name="rate_limit_reset_at" type="datetime-local" /></div>
+
+                  <div><label>Daily Limit USD</label><input name="daily_limit_usd" type="number" step="0.01" value="0" /></div>
+                  <div><label>Daily Used USD</label><input name="daily_used_usd" type="number" step="0.01" value="0" /></div>
+                  <div><label>Weekly Limit USD</label><input name="weekly_limit_usd" type="number" step="0.01" value="0" /></div>
+                  <div><label>Weekly Used USD</label><input name="weekly_used_usd" type="number" step="0.01" value="0" /></div>
+                  <div><label>Monthly Limit USD</label><input name="monthly_limit_usd" type="number" step="0.01" value="0" /></div>
+                  <div><label>Monthly Used USD</label><input name="monthly_used_usd" type="number" step="0.01" value="0" /></div>
+
+                  <div><label>5h Limit Requests</label><input name="five_hour_limit_requests" type="number" value="0" /></div>
+                  <div><label>5h Used Requests</label><input name="five_hour_used_requests" type="number" value="0" /></div>
+                  <div><label>Remaining /5m</label><input name="rate_limit_remaining_5min" type="number" value="0" /></div>
+                  <div><label>Remaining /hour</label><input name="rate_limit_remaining_hour" type="number" value="0" /></div>
+
+                  <div class="wide"><label>Tags (comma)</label><input name="tags" placeholder="prod,priority" /></div>
+                  <div class="wide"><label>Notes</label><textarea name="notes" placeholder="Operational notes"></textarea></div>
+                  <div class="wide"><button class="btn" type="submit">Save Account Telemetry</button></div>
+                </form>
+                <div id="account-flash" class="flash" aria-live="polite"></div>
+              </article>
+
+              <article class="panel">
+                <h4>Profile Registry</h4>
+                <div class="table-wrap compact">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Provider</th>
+                        <th>Frontend</th>
+                        <th>Account</th>
+                        <th>Priority</th>
+                        <th>Lease</th>
+                        <th>Health</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="profiles-body"></tbody>
+                  </table>
+                </div>
+
+                <h5>Create Profile</h5>
+                <form id="profile-form" class="form-grid">
+                  <div><label>ID</label><input name="id" required placeholder="codex-main" /></div>
+                  <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
+                  <div><label>Frontend</label><input name="frontend" required placeholder="codex" /></div>
+                  <div><label>Auth Method</label><input name="auth_method" required placeholder="chatgpt" /></div>
+                  <div><label>Protocol</label><input name="protocol" required placeholder="app_server" /></div>
+                  <div><label>Account</label><input name="account" placeholder="team-primary" /></div>
+                  <div><label>Priority</label><input name="priority" type="number" value="5" /></div>
+                  <div><label>Budget USD</label><input name="budget_daily_usd" type="number" step="0.01" value="0" /></div>
+                  <div class="wide"><label>Tags (comma)</label><input name="tags" placeholder="prod,primary" /></div>
+                  <div class="wide"><label>Owner Scopes (comma)</label><input name="owner_scopes" placeholder="multica,ops,*" /></div>
+                  <div><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
+                  <div class="wide"><button class="btn" type="submit">Save Profile</button></div>
+                </form>
+                <div id="profile-flash" class="flash" aria-live="polite"></div>
+              </article>
             </div>
-          </div>
+          </section>
 
-          <div class="accounts-layout">
-            <div class="accounts-grid" id="accounts-grid"></div>
-
-            <aside class="panel subpanel">
-              <h3>Account Telemetry Editor</h3>
-              <p class="subhead">Create or update provider account limits, expiry windows, and runtime status.</p>
-              <form id="account-form" class="form-grid dense">
-                <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
-                <div><label>Account</label><input name="account" required placeholder="team-primary" /></div>
-                <div><label>Status</label><select name="status"><option value="healthy">healthy</option><option value="degraded">degraded</option><option value="cooldown">cooldown</option><option value="standby">standby</option><option value="disabled">disabled</option></select></div>
-                <div><label>Tier</label><input name="tier" placeholder="chatgpt-pro" /></div>
-                <div><label>Auth Method</label><input name="auth_method" placeholder="chatgpt" /></div>
-                <div><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
-                <div><label>Auth Expires At</label><input name="auth_expires_at" type="datetime-local" /></div>
-                <div><label>Rate Reset At</label><input name="rate_limit_reset_at" type="datetime-local" /></div>
-                <div><label>Daily Limit USD</label><input name="daily_limit_usd" type="number" step="0.01" value="0" /></div>
-                <div><label>Daily Used USD</label><input name="daily_used_usd" type="number" step="0.01" value="0" /></div>
-                <div><label>Daily Reset At</label><input name="daily_reset_at" type="datetime-local" /></div>
-                <div><label>Monthly Limit USD</label><input name="monthly_limit_usd" type="number" step="0.01" value="0" /></div>
-                <div><label>Monthly Used USD</label><input name="monthly_used_usd" type="number" step="0.01" value="0" /></div>
-                <div><label>Monthly Reset At</label><input name="monthly_reset_at" type="datetime-local" /></div>
-                <div><label>Remaining /5m</label><input name="rate_limit_remaining_5min" type="number" value="0" /></div>
-                <div><label>Remaining /hour</label><input name="rate_limit_remaining_hour" type="number" value="0" /></div>
-                <div class="wide"><label>Tags (comma)</label><input name="tags" placeholder="prod,primary" /></div>
-                <div class="wide"><label>Notes</label><textarea name="notes" placeholder="Operational notes, escalation info, billing details"></textarea></div>
-                <div class="wide action-slot"><button class="btn" type="submit">Save Account Telemetry</button></div>
-              </form>
-              <div id="account-flash" class="flash" aria-live="polite"></div>
-            </aside>
-          </div>
-
-          <div class="table-wrap large-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Provider</th>
-                  <th>Account</th>
-                  <th>Status</th>
-                  <th>Profiles</th>
-                  <th>Health</th>
-                  <th>Auth Expiry</th>
-                  <th>Daily Usage</th>
-                  <th>Monthly Usage</th>
-                  <th>Rate Limits</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="accounts-table-body"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="panel section" id="profiles">
-          <div class="section-head">
-            <div>
-              <h2>Runtime Profiles</h2>
-              <p>Profile-level routing controls mapped to provider accounts and owner scopes.</p>
+          <section class="page" data-page="providers">
+            <div class="panel">
+              <div class="section-head">
+                <div>
+                  <h3>Provider Portfolio</h3>
+                  <p>Cross-provider account quality, usage pressure, and readiness landscape.</p>
+                </div>
+              </div>
+              <div id="providers-board" class="provider-board large"></div>
             </div>
-          </div>
-          <div class="split-two">
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Provider</th>
-                    <th>Frontend</th>
-                    <th>Account</th>
-                    <th>Priority</th>
-                    <th>Lease</th>
-                    <th>Health</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="profiles-body"></tbody>
-              </table>
-            </div>
+          </section>
 
-            <div class="panel subpanel">
-              <h3>Create Profile</h3>
-              <form id="profile-form" class="form-grid dense">
-                <div><label>ID</label><input name="id" required placeholder="codex-main" /></div>
-                <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
-                <div><label>Frontend</label><input name="frontend" required placeholder="codex" /></div>
-                <div><label>Auth Method</label><input name="auth_method" required placeholder="chatgpt" /></div>
-                <div><label>Protocol</label><input name="protocol" required placeholder="app_server" /></div>
-                <div><label>Account</label><input name="account" placeholder="team-primary" /></div>
-                <div><label>Priority</label><input name="priority" type="number" value="5" /></div>
-                <div><label>Budget USD</label><input name="budget_daily_usd" type="number" step="0.01" value="0" /></div>
-                <div class="wide"><label>Tags (comma)</label><input name="tags" placeholder="prod,primary" /></div>
-                <div class="wide"><label>Owner Scopes (comma)</label><input name="owner_scopes" placeholder="multica,ops,*" /></div>
-                <div><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
-                <div class="wide action-slot"><button class="btn" type="submit">Save Profile</button></div>
-              </form>
-              <div id="profile-flash" class="flash" aria-live="polite"></div>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel section" id="routing">
-          <div class="section-head">
-            <div>
-              <h2>Routing and Adapter Diagnostics</h2>
-              <p>Simulate candidate selection and inspect adapter contract capabilities.</p>
-            </div>
-          </div>
-          <div class="split-two">
-            <div class="panel subpanel">
-              <h3>Route Simulator</h3>
-              <form id="route-form" class="form-grid dense">
-                <div><label>Frontend</label><input name="frontend" placeholder="codex" /></div>
-                <div><label>Task Class</label><input name="task_class" value="coding" /></div>
-                <div><label>Protocol</label><input name="required_protocol" placeholder="app_server" /></div>
-                <div><label>Owner</label><input name="owner" value="dashboard" /></div>
-                <div class="wide"><label>Preferred Providers</label><input name="preferred_providers" placeholder="openai,google" /></div>
-                <div class="wide"><label>Required Tags</label><input name="require_tags" placeholder="prod,primary" /></div>
-                <div class="wide action-slot"><button class="btn" type="submit">Simulate Route</button></div>
-              </form>
-              <pre class="json" id="route-output">{}</pre>
+          <section class="page" data-page="analytics">
+            <div class="panel">
+              <div class="section-head">
+                <div>
+                  <h3>Usage and Forecast Analytics</h3>
+                  <p>Interactive trends and predictive risk across daily, weekly, monthly, and 5-hour windows.</p>
+                </div>
+                <div class="inline-filters">
+                  <label class="field tiny"><span>Account</span><select id="chart-account-select"><option value="__aggregate__">all accounts</option></select></label>
+                  <label class="field tiny"><span>Metric</span><select id="chart-metric-select"><option value="health">health score</option><option value="daily">daily usage %</option><option value="weekly">weekly usage %</option><option value="monthly">monthly usage %</option><option value="fivehour">5h usage %</option><option value="rate5">rate remaining /5m</option></select></label>
+                </div>
+              </div>
+              <div class="chart-wrap"><canvas id="trend-canvas" width="1200" height="300"></canvas></div>
+              <div id="chart-meta" class="hint">No trend data yet.</div>
             </div>
 
-            <div class="panel subpanel">
-              <h3>Adapter Runtime Contract</h3>
-              <pre class="json tall" id="adapters-output">[]</pre>
+            <div class="two-col">
+              <article class="panel">
+                <h4>SLA Breach Alerts</h4>
+                <div id="sla-alerts" class="alerts-list"></div>
+              </article>
+              <article class="panel">
+                <h4>Forecast Signals</h4>
+                <div id="forecast-grid" class="forecast-grid"></div>
+              </article>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section class="panel section" id="governance">
-          <div class="section-head">
-            <div>
-              <h2>Governance and Reliability Controls</h2>
-              <p>Manage secret vault bindings, routing policies, and incident-triggered cooldown automation.</p>
+          <section class="page" data-page="routing">
+            <div class="two-col">
+              <article class="panel">
+                <h3>Route Simulator</h3>
+                <form id="route-form" class="form-grid">
+                  <div><label>Frontend</label><input name="frontend" placeholder="codex" /></div>
+                  <div><label>Task Class</label><input name="task_class" value="coding" /></div>
+                  <div><label>Protocol</label><input name="required_protocol" placeholder="app_server" /></div>
+                  <div><label>Owner</label><input name="owner" value="dashboard" /></div>
+                  <div class="wide"><label>Preferred Providers</label><input name="preferred_providers" placeholder="openai,google" /></div>
+                  <div class="wide"><label>Required Tags</label><input name="require_tags" placeholder="prod,primary" /></div>
+                  <div class="wide"><button class="btn" type="submit">Simulate Route</button></div>
+                </form>
+                <pre class="json" id="route-output">{}</pre>
+              </article>
+
+              <article class="panel">
+                <h3>Adapter Runtime Contract</h3>
+                <pre class="json tall" id="adapters-output">[]</pre>
+              </article>
             </div>
-          </div>
+          </section>
 
-          <div class="split-three">
-            <div class="panel subpanel">
-              <h3>Secrets and Binding</h3>
-              <form id="secret-form" class="form-grid dense">
-                <div><label>Secret Name</label><input name="name" required placeholder="OPENAI_MAIN_KEY" /></div>
-                <div class="wide"><label>Secret Value</label><input name="value" required placeholder="sk-..." /></div>
-                <div class="wide action-slot"><button class="btn btn-warm" type="submit">Store Secret</button></div>
-              </form>
+          <section class="page" data-page="governance">
+            <div class="three-col">
+              <article class="panel">
+                <h3>Secrets and Binding</h3>
+                <form id="secret-form" class="form-grid">
+                  <div><label>Secret Name</label><input name="name" required placeholder="OPENAI_MAIN_KEY" /></div>
+                  <div class="wide"><label>Secret Value</label><input name="value" required placeholder="sk-..." /></div>
+                  <div class="wide"><button class="btn btn-warm" type="submit">Store Secret</button></div>
+                </form>
 
-              <form id="binding-form" class="form-grid dense spaced">
-                <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
-                <div><label>Env Var</label><input name="env_var" required placeholder="OPENAI_API_KEY" /></div>
-                <div class="wide"><label>Secret Key</label><input name="secret_key" required placeholder="OPENAI_MAIN_KEY" /></div>
-                <div class="wide action-slot"><button class="btn" type="submit">Bind Secret</button></div>
-              </form>
+                <form id="binding-form" class="form-grid spaced">
+                  <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
+                  <div><label>Env Var</label><input name="env_var" required placeholder="OPENAI_API_KEY" /></div>
+                  <div class="wide"><label>Secret Key</label><input name="secret_key" required placeholder="OPENAI_MAIN_KEY" /></div>
+                  <div class="wide"><button class="btn" type="submit">Bind Secret</button></div>
+                </form>
 
-              <p class="meta">Stored secret names</p>
-              <pre class="json" id="secrets-output">[]</pre>
-              <div id="secret-flash" class="flash" aria-live="polite"></div>
+                <p class="hint">Stored secret names</p>
+                <pre class="json" id="secrets-output">[]</pre>
+                <div id="secret-flash" class="flash" aria-live="polite"></div>
+              </article>
+
+              <article class="panel">
+                <h3>Policy Rules</h3>
+                <form id="policy-form" class="form-grid">
+                  <div><label>Name</label><input name="name" required placeholder="prod-safety" /></div>
+                  <div><label>Priority</label><input name="priority" type="number" value="100" /></div>
+                  <div class="wide"><label>Frontends</label><input name="frontends" placeholder="codex,opencode" /></div>
+                  <div class="wide"><label>Task Classes</label><input name="task_classes" placeholder="coding,research" /></div>
+                  <div class="wide"><label>Allow Providers</label><input name="allow_providers" placeholder="openai,anthropic" /></div>
+                  <div class="wide"><label>Deny Providers</label><input name="deny_providers" placeholder="xai" /></div>
+                  <div class="wide"><label>Require Any Tag</label><input name="require_any_tag" placeholder="prod" /></div>
+                  <div class="wide"><label>Require Auth Methods</label><input name="require_auth_methods" placeholder="chatgpt,api_key" /></div>
+                  <div><label>Max Budget</label><input name="max_budget_daily_usd" type="number" step="0.01" value="0" /></div>
+                  <div class="wide"><button class="btn btn-warm" type="submit">Save Policy</button></div>
+                </form>
+                <pre class="json" id="policy-output">[]</pre>
+                <div id="policy-flash" class="flash" aria-live="polite"></div>
+              </article>
+
+              <article class="panel">
+                <h3>Capabilities Snapshot</h3>
+                <div id="capability-stats" class="capability-stats"></div>
+              </article>
             </div>
+          </section>
 
-            <div class="panel subpanel">
-              <h3>Policy Rules</h3>
-              <form id="policy-form" class="form-grid dense">
-                <div><label>Name</label><input name="name" required placeholder="prod-safety" /></div>
-                <div><label>Priority</label><input name="priority" type="number" value="100" /></div>
-                <div class="wide"><label>Frontends</label><input name="frontends" placeholder="codex,opencode" /></div>
-                <div class="wide"><label>Task Classes</label><input name="task_classes" placeholder="coding,research" /></div>
-                <div class="wide"><label>Allow Providers</label><input name="allow_providers" placeholder="openai,anthropic" /></div>
-                <div class="wide"><label>Deny Providers</label><input name="deny_providers" placeholder="xai" /></div>
-                <div class="wide"><label>Require Any Tag</label><input name="require_any_tag" placeholder="prod" /></div>
-                <div class="wide"><label>Require Auth Methods</label><input name="require_auth_methods" placeholder="chatgpt,api_key" /></div>
-                <div><label>Max Budget</label><input name="max_budget_daily_usd" type="number" step="0.01" value="0" /></div>
-                <div class="wide action-slot"><button class="btn btn-warm" type="submit">Save Policy</button></div>
-              </form>
-              <pre class="json" id="policy-output">[]</pre>
-              <div id="policy-flash" class="flash" aria-live="polite"></div>
-            </div>
+          <section class="page" data-page="reliability">
+            <div class="two-col">
+              <article class="panel">
+                <h3>Incident Automation</h3>
+                <form id="incident-form" class="form-grid">
+                  <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
+                  <div><label>Kind</label><select name="kind"><option value="rate_limit">rate_limit</option><option value="outage">outage</option><option value="auth_error">auth_error</option><option value="generic">generic</option></select></div>
+                  <div><label>Cooldown Seconds</label><input name="cooldown_seconds" type="number" value="900" /></div>
+                  <div><label>Owner</label><input name="owner" value="dashboard" /></div>
+                  <div class="wide"><label>Message</label><input name="message" placeholder="Hit provider limit; trigger cooldown" /></div>
+                  <div class="wide"><button class="btn btn-danger" type="submit">Record Incident</button></div>
+                </form>
+                <pre class="json tall" id="incident-output">[]</pre>
+                <div id="incident-flash" class="flash" aria-live="polite"></div>
+              </article>
 
-            <div class="panel subpanel">
-              <h3>Incident Automation</h3>
-              <form id="incident-form" class="form-grid dense">
-                <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
-                <div><label>Kind</label><select name="kind"><option value="rate_limit">rate_limit</option><option value="outage">outage</option><option value="auth_error">auth_error</option><option value="generic">generic</option></select></div>
-                <div><label>Cooldown Seconds</label><input name="cooldown_seconds" type="number" value="900" /></div>
-                <div><label>Owner</label><input name="owner" value="dashboard" /></div>
-                <div class="wide"><label>Message</label><input name="message" placeholder="Hit provider limit; trigger cooldown" /></div>
-                <div class="wide action-slot"><button class="btn btn-danger" type="submit">Record Incident</button></div>
-              </form>
-              <pre class="json" id="incident-output">[]</pre>
-              <div id="incident-flash" class="flash" aria-live="polite"></div>
+              <article class="panel">
+                <h3>Account Failover Console</h3>
+                <form id="failover-form" class="form-grid">
+                  <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
+                  <div><label>Account</label><input name="account" required placeholder="default" /></div>
+                  <div><label>Cooldown Seconds</label><input name="cooldown_seconds" type="number" value="900" /></div>
+                  <div><label>Owner</label><input name="owner" value="dashboard" /></div>
+                  <div class="wide"><label>Message</label><input name="message" placeholder="Manual failover initiated by operations" /></div>
+                  <div class="wide"><button class="btn btn-warm" type="submit">Trigger Failover</button></div>
+                </form>
+                <pre class="json" id="failover-output">{}</pre>
+                <div id="failover-flash" class="flash" aria-live="polite"></div>
+              </article>
             </div>
-          </div>
-        </section>
-      </main>
+          </section>
+
+          <section class="page" data-page="capabilities">
+            <div class="panel">
+              <div class="section-head">
+                <div>
+                  <h3>50+ Advanced Capability Matrix</h3>
+                  <p>Enterprise-ready capabilities across orchestration, limits intelligence, automation, and security.</p>
+                </div>
+              </div>
+              <div id="capability-list" class="capability-list"></div>
+            </div>
+          </section>
+        </main>
+      </div>
     </div>
 
     <div id="global-toast" class="toast" role="status" aria-live="polite"></div>

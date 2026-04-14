@@ -260,9 +260,15 @@ func TestAccountRecordsDashboardMerge(t *testing.T) {
 		DailyLimitUSD:          100,
 		DailyUsedUSD:           41.25,
 		DailyResetAt:           now.Add(11 * time.Hour),
+		WeeklyLimitUSD:         500,
+		WeeklyUsedUSD:          220.75,
+		WeeklyResetAt:          now.Add(3 * 24 * time.Hour),
 		MonthlyLimitUSD:        3000,
 		MonthlyUsedUSD:         1275.5,
 		MonthlyResetAt:         now.Add(18 * 24 * time.Hour),
+		FiveHourLimitRequests:  2000,
+		FiveHourUsedRequests:   750,
+		FiveHourWindowResetAt:  now.Add(2 * time.Hour),
 		RateLimitRemaining5Min: 280,
 		RateLimitRemainingHour: 3100,
 		RateLimitResetAt:       now.Add(2 * time.Minute),
@@ -312,6 +318,12 @@ func TestAccountRecordsDashboardMerge(t *testing.T) {
 	}
 	if openai.DailyUsagePercent != 41.25 {
 		t.Fatalf("expected daily usage 41.25%%, got %v", openai.DailyUsagePercent)
+	}
+	if openai.WeeklyRemainingUSD != 279.25 {
+		t.Fatalf("expected weekly remaining 279.25, got %v", openai.WeeklyRemainingUSD)
+	}
+	if openai.FiveHourRemaining != 1250 {
+		t.Fatalf("expected 5-hour remaining 1250, got %v", openai.FiveHourRemaining)
 	}
 	if openai.AuthExpiresAt == nil {
 		t.Fatalf("expected auth expiry to be set")

@@ -120,9 +120,15 @@ type AccountRecord struct {
 	DailyLimitUSD          float64   `json:"daily_limit_usd,omitempty"`
 	DailyUsedUSD           float64   `json:"daily_used_usd,omitempty"`
 	DailyResetAt           time.Time `json:"daily_reset_at,omitempty"`
+	WeeklyLimitUSD         float64   `json:"weekly_limit_usd,omitempty"`
+	WeeklyUsedUSD          float64   `json:"weekly_used_usd,omitempty"`
+	WeeklyResetAt          time.Time `json:"weekly_reset_at,omitempty"`
 	MonthlyLimitUSD        float64   `json:"monthly_limit_usd,omitempty"`
 	MonthlyUsedUSD         float64   `json:"monthly_used_usd,omitempty"`
 	MonthlyResetAt         time.Time `json:"monthly_reset_at,omitempty"`
+	FiveHourLimitRequests  int       `json:"five_hour_limit_requests,omitempty"`
+	FiveHourUsedRequests   int       `json:"five_hour_used_requests,omitempty"`
+	FiveHourWindowResetAt  time.Time `json:"five_hour_window_reset_at,omitempty"`
 	RateLimitRemaining5Min int       `json:"rate_limit_remaining_5min,omitempty"`
 	RateLimitRemainingHour int       `json:"rate_limit_remaining_hour,omitempty"`
 	RateLimitResetAt       time.Time `json:"rate_limit_reset_at,omitempty"`
@@ -151,11 +157,21 @@ type DashboardAccount struct {
 	DailyRemainingUSD      float64    `json:"daily_remaining_usd,omitempty"`
 	DailyUsagePercent      float64    `json:"daily_usage_percent,omitempty"`
 	DailyResetAt           *time.Time `json:"daily_reset_at,omitempty"`
+	WeeklyLimitUSD         float64    `json:"weekly_limit_usd,omitempty"`
+	WeeklyUsedUSD          float64    `json:"weekly_used_usd,omitempty"`
+	WeeklyRemainingUSD     float64    `json:"weekly_remaining_usd,omitempty"`
+	WeeklyUsagePercent     float64    `json:"weekly_usage_percent,omitempty"`
+	WeeklyResetAt          *time.Time `json:"weekly_reset_at,omitempty"`
 	MonthlyLimitUSD        float64    `json:"monthly_limit_usd,omitempty"`
 	MonthlyUsedUSD         float64    `json:"monthly_used_usd,omitempty"`
 	MonthlyRemainingUSD    float64    `json:"monthly_remaining_usd,omitempty"`
 	MonthlyUsagePercent    float64    `json:"monthly_usage_percent,omitempty"`
 	MonthlyResetAt         *time.Time `json:"monthly_reset_at,omitempty"`
+	FiveHourLimitRequests  int        `json:"five_hour_limit_requests,omitempty"`
+	FiveHourUsedRequests   int        `json:"five_hour_used_requests,omitempty"`
+	FiveHourRemaining      int        `json:"five_hour_remaining,omitempty"`
+	FiveHourUsagePercent   float64    `json:"five_hour_usage_percent,omitempty"`
+	FiveHourWindowResetAt  *time.Time `json:"five_hour_window_reset_at,omitempty"`
 	RateLimitRemaining5Min int        `json:"rate_limit_remaining_5min,omitempty"`
 	RateLimitRemainingHour int        `json:"rate_limit_remaining_hour,omitempty"`
 	RateLimitResetAt       *time.Time `json:"rate_limit_reset_at,omitempty"`

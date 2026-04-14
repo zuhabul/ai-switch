@@ -845,10 +845,18 @@ func (s *Service) DashboardSummary(ctx context.Context) (model.DashboardSummary,
 		entry.DailyUsedUSD = record.DailyUsedUSD
 		entry.DailyRemainingUSD = remainingBudget(record.DailyLimitUSD, record.DailyUsedUSD)
 		entry.DailyUsagePercent = usagePercent(record.DailyUsedUSD, record.DailyLimitUSD)
+		entry.WeeklyLimitUSD = record.WeeklyLimitUSD
+		entry.WeeklyUsedUSD = record.WeeklyUsedUSD
+		entry.WeeklyRemainingUSD = remainingBudget(record.WeeklyLimitUSD, record.WeeklyUsedUSD)
+		entry.WeeklyUsagePercent = usagePercent(record.WeeklyUsedUSD, record.WeeklyLimitUSD)
 		entry.MonthlyLimitUSD = record.MonthlyLimitUSD
 		entry.MonthlyUsedUSD = record.MonthlyUsedUSD
 		entry.MonthlyRemainingUSD = remainingBudget(record.MonthlyLimitUSD, record.MonthlyUsedUSD)
 		entry.MonthlyUsagePercent = usagePercent(record.MonthlyUsedUSD, record.MonthlyLimitUSD)
+		entry.FiveHourLimitRequests = record.FiveHourLimitRequests
+		entry.FiveHourUsedRequests = record.FiveHourUsedRequests
+		entry.FiveHourRemaining = remainingUnits(record.FiveHourLimitRequests, record.FiveHourUsedRequests)
+		entry.FiveHourUsagePercent = usagePercent(float64(record.FiveHourUsedRequests), float64(record.FiveHourLimitRequests))
 		entry.RateLimitRemaining5Min = record.RateLimitRemaining5Min
 		entry.RateLimitRemainingHour = record.RateLimitRemainingHour
 		entry.Tags = slices.Clone(record.Tags)
@@ -865,6 +873,14 @@ func (s *Service) DashboardSummary(ctx context.Context) (model.DashboardSummary,
 		if !record.MonthlyResetAt.IsZero() {
 			t := record.MonthlyResetAt
 			entry.MonthlyResetAt = &t
+		}
+		if !record.WeeklyResetAt.IsZero() {
+			t := record.WeeklyResetAt
+			entry.WeeklyResetAt = &t
+		}
+		if !record.FiveHourWindowResetAt.IsZero() {
+			t := record.FiveHourWindowResetAt
+			entry.FiveHourWindowResetAt = &t
 		}
 		if !record.RateLimitResetAt.IsZero() {
 			t := record.RateLimitResetAt
@@ -1041,8 +1057,11 @@ func validateAccountRecord(record model.AccountRecord) error {
 	if strings.TrimSpace(record.Account) == "" {
 		return fmt.Errorf("account is required")
 	}
-	if record.DailyLimitUSD < 0 || record.DailyUsedUSD < 0 || record.MonthlyLimitUSD < 0 || record.MonthlyUsedUSD < 0 {
+	if record.DailyLimitUSD < 0 || record.DailyUsedUSD < 0 || record.WeeklyLimitUSD < 0 || record.WeeklyUsedUSD < 0 || record.MonthlyLimitUSD < 0 || record.MonthlyUsedUSD < 0 {
 		return fmt.Errorf("limit and usage values cannot be negative")
+	}
+	if record.FiveHourLimitRequests < 0 || record.FiveHourUsedRequests < 0 {
+		return fmt.Errorf("5-hour request limits cannot be negative")
 	}
 	return nil
 }
@@ -1103,6 +1122,17 @@ func usagePercent(used, limit float64) float64 {
 		return 0
 	}
 	return round2(clamp((used/limit)*100, 0, 999))
+}
+
+func remainingUnits(limit, used int) int {
+	if limit <= 0 {
+		return 0
+	}
+	remaining := limit - used
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }
 
 func accountHealthScore(h model.HealthSnapshot) float64 {

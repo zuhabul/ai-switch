@@ -133,6 +133,71 @@ func (s *Service) GetProfile(ctx context.Context, profileID string) (model.Profi
 	return p, nil
 }
 
+func (s *Service) UpsertAccount(ctx context.Context, record model.AccountRecord) error {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	record = normalizeAccountRecord(record)
+	if err := validateAccountRecord(record); err != nil {
+		return err
+	}
+	if state.Accounts == nil {
+		state.Accounts = map[string]model.AccountRecord{}
+	}
+	state.Accounts[accountStorageKey(record.Provider, record.Account)] = record
+	return s.store.Save(state)
+}
+
+func (s *Service) DeleteAccount(ctx context.Context, provider, account string) error {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.store.Load()
+	if err != nil {
+		return err
+	}
+	key := accountStorageKey(provider, account)
+	if _, ok := state.Accounts[key]; !ok {
+		return fmt.Errorf("unknown account %s/%s", strings.TrimSpace(provider), defaultAccountLabel(strings.TrimSpace(account)))
+	}
+	delete(state.Accounts, key)
+	return s.store.Save(state)
+}
+
+func (s *Service) ListAccountRecords(ctx context.Context) ([]model.AccountRecord, error) {
+	_ = ctx
+	state, err := s.store.Load()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.AccountRecord, 0, len(state.Accounts))
+	for _, record := range state.Accounts {
+		out = append(out, normalizeAccountRecord(record))
+	}
+	slices.SortStableFunc(out, func(a, b model.AccountRecord) int {
+		if a.Provider < b.Provider {
+			return -1
+		}
+		if a.Provider > b.Provider {
+			return 1
+		}
+		if a.Account < b.Account {
+			return -1
+		}
+		if a.Account > b.Account {
+			return 1
+		}
+		return 0
+	})
+	return out, nil
+}
+
 func (s *Service) AddPolicy(ctx context.Context, rule model.PolicyRule) error {
 	_ = ctx
 	s.mu.Lock()
@@ -624,21 +689,27 @@ func (s *Service) DashboardSummary(ctx context.Context) (model.DashboardSummary,
 		account  string
 	}
 	accountMap := map[accountKey]*model.DashboardAccount{}
-	for _, dp := range dashProfiles {
-		acct := dp.Profile.Account
-		if acct == "" {
-			acct = "default"
+	healthScoreTotal := map[accountKey]float64{}
+	healthScoreCount := map[accountKey]int{}
+	withRecordMeta := map[accountKey]bool{}
+	ensureAccount := func(provider, account string) (*model.DashboardAccount, accountKey) {
+		k := accountKey{
+			provider: strings.TrimSpace(provider),
+			account:  defaultAccountLabel(strings.TrimSpace(account)),
 		}
-		k := accountKey{provider: dp.Profile.Provider, account: acct}
 		if accountMap[k] == nil {
 			accountMap[k] = &model.DashboardAccount{
-				Provider:   dp.Profile.Provider,
-				Account:    acct,
+				Provider:   k.provider,
+				Account:    k.account,
 				ProfileIDs: []string{},
 				Frontends:  []string{},
+				Tags:       []string{},
 			}
 		}
-		entry := accountMap[k]
+		return accountMap[k], k
+	}
+	for _, dp := range dashProfiles {
+		entry, k := ensureAccount(dp.Profile.Provider, dp.Profile.Account)
 		entry.ProfileIDs = append(entry.ProfileIDs, dp.Profile.ID)
 		if !slices.Contains(entry.Frontends, dp.Profile.Frontend) {
 			entry.Frontends = append(entry.Frontends, dp.Profile.Frontend)
@@ -646,14 +717,77 @@ func (s *Service) DashboardSummary(ctx context.Context) (model.DashboardSummary,
 		if dp.Lease != nil {
 			entry.ActiveLeases++
 		}
+		if dp.Profile.CooldownUntil.After(now) {
+			entry.CooldownProfiles++
+		}
 		if dp.Health != nil && dp.Health.RecentErrorRatePercent <= 3.0 {
 			entry.HealthyProfiles++
 		}
+		if dp.Health != nil {
+			score := accountHealthScore(*dp.Health)
+			healthScoreTotal[k] += score
+			healthScoreCount[k]++
+		}
+	}
+
+	for _, record := range state.Accounts {
+		record = normalizeAccountRecord(record)
+		if _, ok := providers[record.Provider]; !ok {
+			providers[record.Provider] = 0
+		}
+		entry, k := ensureAccount(record.Provider, record.Account)
+		withRecordMeta[k] = true
+		entry.Status = record.Status
+		entry.Tier = record.Tier
+		entry.AuthMethod = record.AuthMethod
+		entry.DailyLimitUSD = record.DailyLimitUSD
+		entry.DailyUsedUSD = record.DailyUsedUSD
+		entry.DailyRemainingUSD = remainingBudget(record.DailyLimitUSD, record.DailyUsedUSD)
+		entry.DailyUsagePercent = usagePercent(record.DailyUsedUSD, record.DailyLimitUSD)
+		entry.MonthlyLimitUSD = record.MonthlyLimitUSD
+		entry.MonthlyUsedUSD = record.MonthlyUsedUSD
+		entry.MonthlyRemainingUSD = remainingBudget(record.MonthlyLimitUSD, record.MonthlyUsedUSD)
+		entry.MonthlyUsagePercent = usagePercent(record.MonthlyUsedUSD, record.MonthlyLimitUSD)
+		entry.RateLimitRemaining5Min = record.RateLimitRemaining5Min
+		entry.RateLimitRemainingHour = record.RateLimitRemainingHour
+		entry.Tags = slices.Clone(record.Tags)
+		entry.Notes = record.Notes
+
+		if !record.AuthExpiresAt.IsZero() {
+			t := record.AuthExpiresAt
+			entry.AuthExpiresAt = &t
+		}
+		if !record.DailyResetAt.IsZero() {
+			t := record.DailyResetAt
+			entry.DailyResetAt = &t
+		}
+		if !record.MonthlyResetAt.IsZero() {
+			t := record.MonthlyResetAt
+			entry.MonthlyResetAt = &t
+		}
+		if !record.RateLimitResetAt.IsZero() {
+			t := record.RateLimitResetAt
+			entry.RateLimitResetAt = &t
+		}
+		if !record.LastCheckedAt.IsZero() {
+			t := record.LastCheckedAt
+			entry.LastCheckedAt = &t
+		}
 	}
 	accounts := make([]model.DashboardAccount, 0, len(accountMap))
-	for _, a := range accountMap {
+	for k, a := range accountMap {
 		slices.Sort(a.ProfileIDs)
 		slices.Sort(a.Frontends)
+		slices.Sort(a.Tags)
+		a.ProfileCount = len(a.ProfileIDs)
+		if healthScoreCount[k] > 0 {
+			a.HealthScore = round2(healthScoreTotal[k] / float64(healthScoreCount[k]))
+		} else if a.ProfileCount > 0 {
+			a.HealthScore = round2((float64(a.HealthyProfiles) / float64(a.ProfileCount)) * 100)
+		}
+		if !withRecordMeta[k] || strings.TrimSpace(a.Status) == "" {
+			a.Status = inferAccountStatus(*a)
+		}
 		accounts = append(accounts, *a)
 	}
 	slices.SortStableFunc(accounts, func(a, b model.DashboardAccount) int {
@@ -786,4 +920,112 @@ func normalizeProfile(p model.Profile) model.Profile {
 	}
 	p.OwnerScopes = scopes
 	return p
+}
+
+func accountStorageKey(provider, account string) string {
+	return strings.ToLower(strings.TrimSpace(provider)) + "::" + strings.ToLower(defaultAccountLabel(strings.TrimSpace(account)))
+}
+
+func defaultAccountLabel(account string) string {
+	if strings.TrimSpace(account) == "" {
+		return "default"
+	}
+	return strings.TrimSpace(account)
+}
+
+func validateAccountRecord(record model.AccountRecord) error {
+	if strings.TrimSpace(record.Provider) == "" {
+		return fmt.Errorf("provider is required")
+	}
+	if strings.TrimSpace(record.Account) == "" {
+		return fmt.Errorf("account is required")
+	}
+	if record.DailyLimitUSD < 0 || record.DailyUsedUSD < 0 || record.MonthlyLimitUSD < 0 || record.MonthlyUsedUSD < 0 {
+		return fmt.Errorf("limit and usage values cannot be negative")
+	}
+	return nil
+}
+
+func normalizeAccountRecord(record model.AccountRecord) model.AccountRecord {
+	record.Provider = strings.TrimSpace(record.Provider)
+	record.Account = defaultAccountLabel(record.Account)
+	record.Status = strings.TrimSpace(strings.ToLower(record.Status))
+	record.Tier = strings.TrimSpace(record.Tier)
+	record.AuthMethod = strings.TrimSpace(record.AuthMethod)
+	record.Notes = strings.TrimSpace(record.Notes)
+	if record.LastCheckedAt.IsZero() {
+		record.LastCheckedAt = time.Now().UTC()
+	}
+	tags := make([]string, 0, len(record.Tags))
+	seen := map[string]struct{}{}
+	for _, tag := range record.Tags {
+		clean := strings.TrimSpace(strings.ToLower(tag))
+		if clean == "" {
+			continue
+		}
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		tags = append(tags, clean)
+	}
+	record.Tags = tags
+	return record
+}
+
+func inferAccountStatus(account model.DashboardAccount) string {
+	if account.ProfileCount == 0 {
+		return "standby"
+	}
+	if account.CooldownProfiles >= account.ProfileCount {
+		return "cooldown"
+	}
+	if account.HealthyProfiles == 0 {
+		return "degraded"
+	}
+	return "healthy"
+}
+
+func remainingBudget(limit, used float64) float64 {
+	if limit <= 0 {
+		return 0
+	}
+	remaining := limit - used
+	if remaining < 0 {
+		return 0
+	}
+	return round2(remaining)
+}
+
+func usagePercent(used, limit float64) float64 {
+	if limit <= 0 {
+		return 0
+	}
+	return round2(clamp((used/limit)*100, 0, 999))
+}
+
+func accountHealthScore(h model.HealthSnapshot) float64 {
+	score := 100.0
+	score -= clamp(h.RecentErrorRatePercent*18.0, 0, 75)
+	score -= clamp(float64(h.EstimatedLatencyMS)/20.0, 0, 22)
+	score += clamp(float64(h.RemainingRequests5Min)/6.0, 0, 8)
+	score += clamp(float64(h.RemainingRequestsHour)/120.0, 0, 8)
+	return round2(clamp(score, 0, 100))
+}
+
+func round2(v float64) float64 {
+	if v >= 0 {
+		return float64(int(v*100+0.5)) / 100
+	}
+	return float64(int(v*100-0.5)) / 100
+}
+
+func clamp(v, min, max float64) float64 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }

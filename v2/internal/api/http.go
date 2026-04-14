@@ -55,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v2/secrets", s.secrets)
 	mux.HandleFunc("/v2/runtime/plan", s.runtimePlan)
 	mux.HandleFunc("/v2/dashboard/summary", s.dashboardSummary)
+	mux.HandleFunc("/v2/accounts", s.accounts)
 	mux.HandleFunc("/v2/adapters", s.adaptersInfo)
 	mux.HandleFunc("/v2/adapters/contract", s.adaptersContract)
 	mux.HandleFunc("/v2/incidents", s.incidents)
@@ -536,6 +537,55 @@ func (s *Server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		summary, err := s.svc.DashboardSummary(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+		account := strings.TrimSpace(r.URL.Query().Get("account"))
+		items := make([]model.DashboardAccount, 0, len(summary.Accounts))
+		for _, item := range summary.Accounts {
+			if provider != "" && !strings.EqualFold(item.Provider, provider) {
+				continue
+			}
+			if account != "" && !strings.EqualFold(item.Account, account) {
+				continue
+			}
+			items = append(items, item)
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost, http.MethodPut:
+		var record model.AccountRecord
+		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.svc.UpsertAccount(r.Context(), record); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	case http.MethodDelete:
+		provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+		account := strings.TrimSpace(r.URL.Query().Get("account"))
+		if provider == "" || account == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "provider and account are required"})
+			return
+		}
+		if err := s.svc.DeleteAccount(r.Context(), provider, account); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) adaptersInfo(w http.ResponseWriter, r *http.Request) {

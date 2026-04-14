@@ -110,13 +110,58 @@ type DashboardProfile struct {
 	LastHealthAt *time.Time      `json:"last_health_at,omitempty"`
 }
 
+type AccountRecord struct {
+	Provider               string    `json:"provider"`
+	Account                string    `json:"account"`
+	Status                 string    `json:"status,omitempty"`
+	Tier                   string    `json:"tier,omitempty"`
+	AuthMethod             string    `json:"auth_method,omitempty"`
+	AuthExpiresAt          time.Time `json:"auth_expires_at,omitempty"`
+	DailyLimitUSD          float64   `json:"daily_limit_usd,omitempty"`
+	DailyUsedUSD           float64   `json:"daily_used_usd,omitempty"`
+	DailyResetAt           time.Time `json:"daily_reset_at,omitempty"`
+	MonthlyLimitUSD        float64   `json:"monthly_limit_usd,omitempty"`
+	MonthlyUsedUSD         float64   `json:"monthly_used_usd,omitempty"`
+	MonthlyResetAt         time.Time `json:"monthly_reset_at,omitempty"`
+	RateLimitRemaining5Min int       `json:"rate_limit_remaining_5min,omitempty"`
+	RateLimitRemainingHour int       `json:"rate_limit_remaining_hour,omitempty"`
+	RateLimitResetAt       time.Time `json:"rate_limit_reset_at,omitempty"`
+	LastCheckedAt          time.Time `json:"last_checked_at,omitempty"`
+	Enabled                bool      `json:"enabled"`
+	Tags                   []string  `json:"tags,omitempty"`
+	Notes                  string    `json:"notes,omitempty"`
+}
+
 type DashboardAccount struct {
-	Provider        string   `json:"provider"`
-	Account         string   `json:"account"`
-	ProfileIDs      []string `json:"profile_ids"`
-	Frontends       []string `json:"frontends"`
-	ActiveLeases    int      `json:"active_leases"`
-	HealthyProfiles int      `json:"healthy_profiles"`
+	Provider               string     `json:"provider"`
+	Account                string     `json:"account"`
+	ProfileIDs             []string   `json:"profile_ids"`
+	Frontends              []string   `json:"frontends"`
+	ProfileCount           int        `json:"profile_count"`
+	ActiveLeases           int        `json:"active_leases"`
+	HealthyProfiles        int        `json:"healthy_profiles"`
+	CooldownProfiles       int        `json:"cooldown_profiles"`
+	HealthScore            float64    `json:"health_score"`
+	Status                 string     `json:"status,omitempty"`
+	Tier                   string     `json:"tier,omitempty"`
+	AuthMethod             string     `json:"auth_method,omitempty"`
+	AuthExpiresAt          *time.Time `json:"auth_expires_at,omitempty"`
+	DailyLimitUSD          float64    `json:"daily_limit_usd,omitempty"`
+	DailyUsedUSD           float64    `json:"daily_used_usd,omitempty"`
+	DailyRemainingUSD      float64    `json:"daily_remaining_usd,omitempty"`
+	DailyUsagePercent      float64    `json:"daily_usage_percent,omitempty"`
+	DailyResetAt           *time.Time `json:"daily_reset_at,omitempty"`
+	MonthlyLimitUSD        float64    `json:"monthly_limit_usd,omitempty"`
+	MonthlyUsedUSD         float64    `json:"monthly_used_usd,omitempty"`
+	MonthlyRemainingUSD    float64    `json:"monthly_remaining_usd,omitempty"`
+	MonthlyUsagePercent    float64    `json:"monthly_usage_percent,omitempty"`
+	MonthlyResetAt         *time.Time `json:"monthly_reset_at,omitempty"`
+	RateLimitRemaining5Min int        `json:"rate_limit_remaining_5min,omitempty"`
+	RateLimitRemainingHour int        `json:"rate_limit_remaining_hour,omitempty"`
+	RateLimitResetAt       *time.Time `json:"rate_limit_reset_at,omitempty"`
+	LastCheckedAt          *time.Time `json:"last_checked_at,omitempty"`
+	Tags                   []string   `json:"tags,omitempty"`
+	Notes                  string     `json:"notes,omitempty"`
 }
 
 type DashboardSummary struct {
@@ -136,7 +181,8 @@ type State struct {
 	Policies       []PolicyRule                 `json:"policies"`
 	Leases         map[string]Lease             `json:"leases"`
 	Incidents      []Incident                   `json:"incidents,omitempty"`
-	SecretBindings map[string]map[string]string `json:"secret_bindings"` // profile_id -> env_var -> secret_key
+	Accounts       map[string]AccountRecord     `json:"accounts,omitempty"` // key: provider::account
+	SecretBindings map[string]map[string]string `json:"secret_bindings"`    // profile_id -> env_var -> secret_key
 }
 
 func NewState() State {
@@ -146,6 +192,7 @@ func NewState() State {
 		Policies:       []PolicyRule{},
 		Leases:         map[string]Lease{},
 		Incidents:      []Incident{},
+		Accounts:       map[string]AccountRecord{},
 		SecretBindings: map[string]map[string]string{},
 	}
 }

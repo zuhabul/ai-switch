@@ -3,206 +3,269 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Switch Control Plane</title>
+    <title>AI Switch Command Center</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="ambient ambient-grid" aria-hidden="true"></div>
-    <div class="ambient ambient-glow ambient-glow-a" aria-hidden="true"></div>
-    <div class="ambient ambient-glow ambient-glow-b" aria-hidden="true"></div>
+    <div class="noise" aria-hidden="true"></div>
+    <div class="glow glow-a" aria-hidden="true"></div>
+    <div class="glow glow-b" aria-hidden="true"></div>
 
-    <div class="shell">
-      <header class="topbar glass">
-        <div class="topbar-brand">
-          <p class="eyebrow">Control Plane</p>
-          <h1>AI Switch</h1>
-          <p>Unified routing, account failover, policy enforcement, and runtime orchestration.</p>
+    <div class="app-shell">
+      <header class="panel hero" id="overview">
+        <div class="hero-copy">
+          <p class="kicker">AI Switch v2</p>
+          <h1>Multi-Account Provider Control Tower</h1>
+          <p>
+            Run every provider account as a managed production asset. Track auth expiry, quota windows,
+            spend burn, and failover readiness from one ultra-advanced dashboard.
+          </p>
         </div>
 
-        <div class="topbar-controls">
-          <label class="token-field" for="api-token">
-            <span>API Token</span>
-            <input id="api-token" placeholder="Optional bearer token" autocomplete="off" />
+        <div class="hero-actions">
+          <label class="field token" for="api-token">
+            <span>Bearer Token</span>
+            <input id="api-token" type="password" placeholder="Optional bearer token" autocomplete="off" />
           </label>
-          <div class="action-row">
-            <button class="btn btn-ghost" id="save-token" type="button">Save Token</button>
-            <button class="btn" id="refresh-all" type="button">Refresh</button>
-            <button class="btn btn-soft" id="refresh-adapters" type="button">Adapters</button>
+          <div class="hero-buttons">
+            <button class="btn btn-muted" id="save-token" type="button">Save Token</button>
+            <button class="btn" id="refresh-all" type="button">Refresh All</button>
+            <button class="btn btn-warm" id="refresh-adapters" type="button">Refresh Adapters</button>
           </div>
-          <p class="synced" id="as-of">Waiting for refresh...</p>
+          <div class="sync-row">
+            <span class="sync-label">Last Sync</span>
+            <strong id="as-of">Waiting for refresh...</strong>
+          </div>
         </div>
+
+        <div class="overview-metrics" id="stats"></div>
+        <div class="provider-strip" id="providers-strip"></div>
       </header>
 
-      <nav class="section-nav glass" aria-label="Dashboard Sections">
-        <a href="#overview">Overview</a>
+      <nav class="panel section-nav" aria-label="Section Navigation">
+        <a href="#accounts">Accounts</a>
         <a href="#profiles">Profiles</a>
-        <a href="#simulator">Simulator</a>
-        <a href="#secrets">Secrets</a>
-        <a href="#policies">Policies</a>
-        <a href="#adapters">Adapters</a>
-        <a href="#incidents">Incidents</a>
+        <a href="#routing">Routing</a>
+        <a href="#governance">Governance</a>
       </nav>
 
-      <main class="dashboard">
-        <section class="glass overview" id="overview">
-          <div class="overview-copy">
-            <p class="eyebrow">Live Operations</p>
-            <h2>World-class AI runtime switching for real production traffic</h2>
-            <p>
-              This dashboard manages provider routing, multi-account load distribution,
-              secrets binding, and incident cooldown automation across your coding agent stack.
-            </p>
+      <main class="workspace">
+        <section class="panel section" id="accounts">
+          <div class="section-head">
+            <div>
+              <h2>Account Command Center</h2>
+              <p>Provider-level account reliability board with limits, resets, and auth expiry telemetry.</p>
+            </div>
+            <div class="inline-filters">
+              <label class="field tiny">
+                <span>Filter Provider</span>
+                <select id="account-filter-provider">
+                  <option value="all">all</option>
+                </select>
+              </label>
+              <label class="field tiny">
+                <span>Filter Status</span>
+                <select id="account-filter-status">
+                  <option value="all">all</option>
+                  <option value="healthy">healthy</option>
+                  <option value="degraded">degraded</option>
+                  <option value="cooldown">cooldown</option>
+                  <option value="standby">standby</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </label>
+            </div>
           </div>
-          <div class="stats" id="stats"></div>
+
+          <div class="accounts-layout">
+            <div class="accounts-grid" id="accounts-grid"></div>
+
+            <aside class="panel subpanel">
+              <h3>Account Telemetry Editor</h3>
+              <p class="subhead">Create or update provider account limits, expiry windows, and runtime status.</p>
+              <form id="account-form" class="form-grid dense">
+                <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
+                <div><label>Account</label><input name="account" required placeholder="team-primary" /></div>
+                <div><label>Status</label><select name="status"><option value="healthy">healthy</option><option value="degraded">degraded</option><option value="cooldown">cooldown</option><option value="standby">standby</option><option value="disabled">disabled</option></select></div>
+                <div><label>Tier</label><input name="tier" placeholder="chatgpt-pro" /></div>
+                <div><label>Auth Method</label><input name="auth_method" placeholder="chatgpt" /></div>
+                <div><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
+                <div><label>Auth Expires At</label><input name="auth_expires_at" type="datetime-local" /></div>
+                <div><label>Rate Reset At</label><input name="rate_limit_reset_at" type="datetime-local" /></div>
+                <div><label>Daily Limit USD</label><input name="daily_limit_usd" type="number" step="0.01" value="0" /></div>
+                <div><label>Daily Used USD</label><input name="daily_used_usd" type="number" step="0.01" value="0" /></div>
+                <div><label>Daily Reset At</label><input name="daily_reset_at" type="datetime-local" /></div>
+                <div><label>Monthly Limit USD</label><input name="monthly_limit_usd" type="number" step="0.01" value="0" /></div>
+                <div><label>Monthly Used USD</label><input name="monthly_used_usd" type="number" step="0.01" value="0" /></div>
+                <div><label>Monthly Reset At</label><input name="monthly_reset_at" type="datetime-local" /></div>
+                <div><label>Remaining /5m</label><input name="rate_limit_remaining_5min" type="number" value="0" /></div>
+                <div><label>Remaining /hour</label><input name="rate_limit_remaining_hour" type="number" value="0" /></div>
+                <div class="wide"><label>Tags (comma)</label><input name="tags" placeholder="prod,primary" /></div>
+                <div class="wide"><label>Notes</label><textarea name="notes" placeholder="Operational notes, escalation info, billing details"></textarea></div>
+                <div class="wide action-slot"><button class="btn" type="submit">Save Account Telemetry</button></div>
+              </form>
+              <div id="account-flash" class="flash" aria-live="polite"></div>
+            </aside>
+          </div>
+
+          <div class="table-wrap large-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Account</th>
+                  <th>Status</th>
+                  <th>Profiles</th>
+                  <th>Health</th>
+                  <th>Auth Expiry</th>
+                  <th>Daily Usage</th>
+                  <th>Monthly Usage</th>
+                  <th>Rate Limits</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="accounts-table-body"></tbody>
+            </table>
+          </div>
         </section>
 
-        <section class="canvas-grid">
-          <article class="glass panel panel-wide" id="profiles">
-            <header class="panel-head">
-              <div>
-                <h3>Profiles</h3>
-                <p>Priority, health, lease ownership, and account-level runtime controls.</p>
-              </div>
-            </header>
-
-            <div class="panel-split">
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>ID</th>
-                      <th>Provider</th>
-                      <th>Frontend</th>
-                      <th>Account</th>
-                      <th>Priority</th>
-                      <th>Lease</th>
-                      <th>Health</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="profiles-body"></tbody>
-                </table>
-              </div>
-
-              <div class="panel-form-wrap">
-                <h4>Create Profile</h4>
-                <form id="profile-form" class="form-grid">
-                  <div><label>ID</label><input name="id" required placeholder="codex-main" /></div>
-                  <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
-                  <div><label>Frontend</label><input name="frontend" required placeholder="codex" /></div>
-                  <div><label>Auth Method</label><input name="auth_method" required placeholder="chatgpt" /></div>
-                  <div><label>Protocol</label><input name="protocol" required placeholder="app_server" /></div>
-                  <div><label>Account</label><input name="account" placeholder="team-a" /></div>
-                  <div><label>Priority</label><input name="priority" type="number" value="5" /></div>
-                  <div><label>Budget USD</label><input name="budget_daily_usd" type="number" step="0.01" value="0" /></div>
-                  <div class="wide"><label>Tags (comma)</label><input name="tags" placeholder="prod,primary" /></div>
-                  <div class="wide"><label>Owner Scopes (comma)</label><input name="owner_scopes" placeholder="multica,ops,*" /></div>
-                  <div><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
-                  <div class="wide action-slot"><button class="btn" type="submit">Save Profile</button></div>
-                </form>
-                <div id="profile-flash" class="flash" aria-live="polite"></div>
-              </div>
+        <section class="panel section" id="profiles">
+          <div class="section-head">
+            <div>
+              <h2>Runtime Profiles</h2>
+              <p>Profile-level routing controls mapped to provider accounts and owner scopes.</p>
             </div>
-          </article>
+          </div>
+          <div class="split-two">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Provider</th>
+                    <th>Frontend</th>
+                    <th>Account</th>
+                    <th>Priority</th>
+                    <th>Lease</th>
+                    <th>Health</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="profiles-body"></tbody>
+              </table>
+            </div>
 
-          <article class="glass panel" id="simulator">
-            <header class="panel-head">
-              <div>
-                <h3>Route Simulator</h3>
-                <p>Preview primary and fallback profile candidates before dispatch.</p>
-              </div>
-            </header>
-            <form id="route-form" class="form-grid">
-              <div><label>Frontend</label><input name="frontend" placeholder="codex" /></div>
-              <div><label>Task Class</label><input name="task_class" value="coding" /></div>
-              <div><label>Protocol</label><input name="required_protocol" placeholder="app_server" /></div>
-              <div><label>Owner</label><input name="owner" value="dashboard" /></div>
-              <div class="wide"><label>Preferred Providers</label><input name="preferred_providers" placeholder="openai,google" /></div>
-              <div class="wide"><label>Required Tags</label><input name="require_tags" placeholder="prod,primary" /></div>
-              <div class="wide action-slot"><button class="btn" type="submit">Simulate Route</button></div>
-            </form>
-            <pre class="json" id="route-output">{}</pre>
-          </article>
+            <div class="panel subpanel">
+              <h3>Create Profile</h3>
+              <form id="profile-form" class="form-grid dense">
+                <div><label>ID</label><input name="id" required placeholder="codex-main" /></div>
+                <div><label>Provider</label><input name="provider" required placeholder="openai" /></div>
+                <div><label>Frontend</label><input name="frontend" required placeholder="codex" /></div>
+                <div><label>Auth Method</label><input name="auth_method" required placeholder="chatgpt" /></div>
+                <div><label>Protocol</label><input name="protocol" required placeholder="app_server" /></div>
+                <div><label>Account</label><input name="account" placeholder="team-primary" /></div>
+                <div><label>Priority</label><input name="priority" type="number" value="5" /></div>
+                <div><label>Budget USD</label><input name="budget_daily_usd" type="number" step="0.01" value="0" /></div>
+                <div class="wide"><label>Tags (comma)</label><input name="tags" placeholder="prod,primary" /></div>
+                <div class="wide"><label>Owner Scopes (comma)</label><input name="owner_scopes" placeholder="multica,ops,*" /></div>
+                <div><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
+                <div class="wide action-slot"><button class="btn" type="submit">Save Profile</button></div>
+              </form>
+              <div id="profile-flash" class="flash" aria-live="polite"></div>
+            </div>
+          </div>
+        </section>
 
-          <article class="glass panel" id="secrets">
-            <header class="panel-head">
-              <div>
-                <h3>Secrets and Bindings</h3>
-                <p>Encrypted secret vault with per-profile environment variable mapping.</p>
-              </div>
-            </header>
+        <section class="panel section" id="routing">
+          <div class="section-head">
+            <div>
+              <h2>Routing and Adapter Diagnostics</h2>
+              <p>Simulate candidate selection and inspect adapter contract capabilities.</p>
+            </div>
+          </div>
+          <div class="split-two">
+            <div class="panel subpanel">
+              <h3>Route Simulator</h3>
+              <form id="route-form" class="form-grid dense">
+                <div><label>Frontend</label><input name="frontend" placeholder="codex" /></div>
+                <div><label>Task Class</label><input name="task_class" value="coding" /></div>
+                <div><label>Protocol</label><input name="required_protocol" placeholder="app_server" /></div>
+                <div><label>Owner</label><input name="owner" value="dashboard" /></div>
+                <div class="wide"><label>Preferred Providers</label><input name="preferred_providers" placeholder="openai,google" /></div>
+                <div class="wide"><label>Required Tags</label><input name="require_tags" placeholder="prod,primary" /></div>
+                <div class="wide action-slot"><button class="btn" type="submit">Simulate Route</button></div>
+              </form>
+              <pre class="json" id="route-output">{}</pre>
+            </div>
 
-            <form id="secret-form" class="form-grid">
-              <div><label>Secret Name</label><input name="name" required placeholder="OPENAI_MAIN_KEY" /></div>
-              <div class="wide"><label>Secret Value</label><input name="value" required placeholder="sk-..." /></div>
-              <div class="wide action-slot"><button class="btn btn-soft" type="submit">Store Secret</button></div>
-            </form>
+            <div class="panel subpanel">
+              <h3>Adapter Runtime Contract</h3>
+              <pre class="json tall" id="adapters-output">[]</pre>
+            </div>
+          </div>
+        </section>
 
-            <form id="binding-form" class="form-grid top-gap">
-              <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
-              <div><label>Env Var</label><input name="env_var" required placeholder="OPENAI_API_KEY" /></div>
-              <div class="wide"><label>Secret Key</label><input name="secret_key" required placeholder="OPENAI_MAIN_KEY" /></div>
-              <div class="wide action-slot"><button class="btn" type="submit">Bind Secret</button></div>
-            </form>
+        <section class="panel section" id="governance">
+          <div class="section-head">
+            <div>
+              <h2>Governance and Reliability Controls</h2>
+              <p>Manage secret vault bindings, routing policies, and incident-triggered cooldown automation.</p>
+            </div>
+          </div>
 
-            <p class="panel-note">Stored secret names</p>
-            <pre class="json" id="secrets-output">[]</pre>
-            <div id="secret-flash" class="flash" aria-live="polite"></div>
-          </article>
+          <div class="split-three">
+            <div class="panel subpanel">
+              <h3>Secrets and Binding</h3>
+              <form id="secret-form" class="form-grid dense">
+                <div><label>Secret Name</label><input name="name" required placeholder="OPENAI_MAIN_KEY" /></div>
+                <div class="wide"><label>Secret Value</label><input name="value" required placeholder="sk-..." /></div>
+                <div class="wide action-slot"><button class="btn btn-warm" type="submit">Store Secret</button></div>
+              </form>
 
-          <article class="glass panel" id="policies">
-            <header class="panel-head">
-              <div>
-                <h3>Policy Rules</h3>
-                <p>Global guardrails for providers, tags, auth methods, and budgets.</p>
-              </div>
-            </header>
+              <form id="binding-form" class="form-grid dense spaced">
+                <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
+                <div><label>Env Var</label><input name="env_var" required placeholder="OPENAI_API_KEY" /></div>
+                <div class="wide"><label>Secret Key</label><input name="secret_key" required placeholder="OPENAI_MAIN_KEY" /></div>
+                <div class="wide action-slot"><button class="btn" type="submit">Bind Secret</button></div>
+              </form>
 
-            <form id="policy-form" class="form-grid">
-              <div><label>Name</label><input name="name" required placeholder="prod-safety" /></div>
-              <div><label>Priority</label><input name="priority" type="number" value="100" /></div>
-              <div class="wide"><label>Frontends</label><input name="frontends" placeholder="codex,opencode" /></div>
-              <div class="wide"><label>Task Classes</label><input name="task_classes" placeholder="coding,research" /></div>
-              <div class="wide"><label>Allow Providers</label><input name="allow_providers" placeholder="openai,anthropic" /></div>
-              <div class="wide"><label>Deny Providers</label><input name="deny_providers" placeholder="xai" /></div>
-              <div class="wide"><label>Require Any Tag</label><input name="require_any_tag" placeholder="prod" /></div>
-              <div class="wide"><label>Require Auth Methods</label><input name="require_auth_methods" placeholder="chatgpt,api_key" /></div>
-              <div><label>Max Budget</label><input name="max_budget_daily_usd" type="number" step="0.01" value="0" /></div>
-              <div class="wide action-slot"><button class="btn btn-soft" type="submit">Save Policy</button></div>
-            </form>
-            <pre class="json" id="policy-output">[]</pre>
-            <div id="policy-flash" class="flash" aria-live="polite"></div>
-          </article>
+              <p class="meta">Stored secret names</p>
+              <pre class="json" id="secrets-output">[]</pre>
+              <div id="secret-flash" class="flash" aria-live="polite"></div>
+            </div>
 
-          <article class="glass panel" id="adapters">
-            <header class="panel-head">
-              <div>
-                <h3>Adapters</h3>
-                <p>Runtime hook contracts and protocol capability matrix.</p>
-              </div>
-            </header>
-            <pre class="json" id="adapters-output">[]</pre>
-          </article>
+            <div class="panel subpanel">
+              <h3>Policy Rules</h3>
+              <form id="policy-form" class="form-grid dense">
+                <div><label>Name</label><input name="name" required placeholder="prod-safety" /></div>
+                <div><label>Priority</label><input name="priority" type="number" value="100" /></div>
+                <div class="wide"><label>Frontends</label><input name="frontends" placeholder="codex,opencode" /></div>
+                <div class="wide"><label>Task Classes</label><input name="task_classes" placeholder="coding,research" /></div>
+                <div class="wide"><label>Allow Providers</label><input name="allow_providers" placeholder="openai,anthropic" /></div>
+                <div class="wide"><label>Deny Providers</label><input name="deny_providers" placeholder="xai" /></div>
+                <div class="wide"><label>Require Any Tag</label><input name="require_any_tag" placeholder="prod" /></div>
+                <div class="wide"><label>Require Auth Methods</label><input name="require_auth_methods" placeholder="chatgpt,api_key" /></div>
+                <div><label>Max Budget</label><input name="max_budget_daily_usd" type="number" step="0.01" value="0" /></div>
+                <div class="wide action-slot"><button class="btn btn-warm" type="submit">Save Policy</button></div>
+              </form>
+              <pre class="json" id="policy-output">[]</pre>
+              <div id="policy-flash" class="flash" aria-live="polite"></div>
+            </div>
 
-          <article class="glass panel panel-wide" id="incidents">
-            <header class="panel-head">
-              <div>
-                <h3>Incidents</h3>
-                <p>Capture provider failures and trigger automated cooldown for safer failover.</p>
-              </div>
-            </header>
-
-            <form id="incident-form" class="form-grid">
-              <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
-              <div><label>Kind</label><select name="kind"><option value="rate_limit">rate_limit</option><option value="outage">outage</option><option value="auth_error">auth_error</option><option value="generic">generic</option></select></div>
-              <div><label>Cooldown Seconds</label><input name="cooldown_seconds" type="number" value="900" /></div>
-              <div><label>Owner</label><input name="owner" value="dashboard" /></div>
-              <div class="wide"><label>Message</label><input name="message" placeholder="Hit provider rate limit on coding plan." /></div>
-              <div class="wide action-slot"><button class="btn btn-danger" type="submit">Record Incident</button></div>
-            </form>
-            <pre class="json" id="incident-output">[]</pre>
-            <div id="incident-flash" class="flash" aria-live="polite"></div>
-          </article>
+            <div class="panel subpanel">
+              <h3>Incident Automation</h3>
+              <form id="incident-form" class="form-grid dense">
+                <div><label>Profile ID</label><input name="profile_id" required placeholder="codex-main" /></div>
+                <div><label>Kind</label><select name="kind"><option value="rate_limit">rate_limit</option><option value="outage">outage</option><option value="auth_error">auth_error</option><option value="generic">generic</option></select></div>
+                <div><label>Cooldown Seconds</label><input name="cooldown_seconds" type="number" value="900" /></div>
+                <div><label>Owner</label><input name="owner" value="dashboard" /></div>
+                <div class="wide"><label>Message</label><input name="message" placeholder="Hit provider limit; trigger cooldown" /></div>
+                <div class="wide action-slot"><button class="btn btn-danger" type="submit">Record Incident</button></div>
+              </form>
+              <pre class="json" id="incident-output">[]</pre>
+              <div id="incident-flash" class="flash" aria-live="polite"></div>
+            </div>
+          </div>
         </section>
       </main>
     </div>

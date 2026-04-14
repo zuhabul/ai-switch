@@ -214,6 +214,125 @@ func TestDashboardSummary(t *testing.T) {
 	if len(summary.Accounts) != 1 {
 		t.Fatalf("expected 1 account aggregation, got %d", len(summary.Accounts))
 	}
+	if summary.Accounts[0].ProfileCount != 1 {
+		t.Fatalf("expected profile_count=1, got %+v", summary.Accounts[0])
+	}
+}
+
+func TestAccountRecordsDashboardMerge(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	_ = svc.AddProfile(ctx, model.Profile{
+		ID:         "openai-a-1",
+		Provider:   "openai",
+		Frontend:   "codex",
+		AuthMethod: "chatgpt",
+		Protocol:   "app_server",
+		Account:    "team-a",
+		Enabled:    true,
+	})
+	_ = svc.AddProfile(ctx, model.Profile{
+		ID:         "openai-a-2",
+		Provider:   "openai",
+		Frontend:   "opencode",
+		AuthMethod: "chatgpt",
+		Protocol:   "app_server",
+		Account:    "team-a",
+		Enabled:    true,
+	})
+	if err := svc.UpdateHealth(ctx, model.HealthSnapshot{
+		ProfileID:              "openai-a-1",
+		RemainingRequests5Min:  30,
+		RemainingRequestsHour:  200,
+		EstimatedLatencyMS:     120,
+		RecentErrorRatePercent: 0.4,
+	}); err != nil {
+		t.Fatalf("update health: %v", err)
+	}
+	if err := svc.UpsertAccount(ctx, model.AccountRecord{
+		Provider:               "openai",
+		Account:                "team-a",
+		Status:                 "healthy",
+		Tier:                   "chatgpt-pro",
+		AuthMethod:             "chatgpt",
+		AuthExpiresAt:          now.Add(48 * time.Hour),
+		DailyLimitUSD:          100,
+		DailyUsedUSD:           41.25,
+		DailyResetAt:           now.Add(11 * time.Hour),
+		MonthlyLimitUSD:        3000,
+		MonthlyUsedUSD:         1275.5,
+		MonthlyResetAt:         now.Add(18 * 24 * time.Hour),
+		RateLimitRemaining5Min: 280,
+		RateLimitRemainingHour: 3100,
+		RateLimitResetAt:       now.Add(2 * time.Minute),
+		Tags:                   []string{"Prod", "Primary", "Prod"},
+		Notes:                  "Main production account",
+		Enabled:                true,
+	}); err != nil {
+		t.Fatalf("upsert account: %v", err)
+	}
+	if err := svc.UpsertAccount(ctx, model.AccountRecord{
+		Provider:      "anthropic",
+		Account:       "claude-backup",
+		Status:        "standby",
+		Tier:          "claude-max",
+		AuthMethod:    "subscription",
+		DailyLimitUSD: 40,
+		DailyUsedUSD:  0,
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("upsert backup account: %v", err)
+	}
+
+	summary, err := svc.DashboardSummary(ctx)
+	if err != nil {
+		t.Fatalf("dashboard summary failed: %v", err)
+	}
+	if summary.Counts["accounts"] != 2 {
+		t.Fatalf("expected 2 accounts, got %d", summary.Counts["accounts"])
+	}
+	var openai model.DashboardAccount
+	found := false
+	for _, a := range summary.Accounts {
+		if a.Provider == "openai" && a.Account == "team-a" {
+			openai = a
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected openai/team-a account in summary: %+v", summary.Accounts)
+	}
+	if openai.ProfileCount != 2 {
+		t.Fatalf("expected profile_count=2, got %+v", openai)
+	}
+	if openai.DailyRemainingUSD != 58.75 {
+		t.Fatalf("expected daily remaining 58.75, got %v", openai.DailyRemainingUSD)
+	}
+	if openai.DailyUsagePercent != 41.25 {
+		t.Fatalf("expected daily usage 41.25%%, got %v", openai.DailyUsagePercent)
+	}
+	if openai.AuthExpiresAt == nil {
+		t.Fatalf("expected auth expiry to be set")
+	}
+	if len(openai.Tags) != 2 {
+		t.Fatalf("expected deduped tags, got %+v", openai.Tags)
+	}
+	if openai.HealthScore <= 0 {
+		t.Fatalf("expected positive health score, got %v", openai.HealthScore)
+	}
+
+	if err := svc.DeleteAccount(ctx, "anthropic", "claude-backup"); err != nil {
+		t.Fatalf("delete account failed: %v", err)
+	}
+	records, err := svc.ListAccountRecords(ctx)
+	if err != nil {
+		t.Fatalf("list accounts failed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 remaining account record, got %d", len(records))
+	}
 }
 
 func TestRecordIncidentAppliesCooldown(t *testing.T) {

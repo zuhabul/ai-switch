@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/zuhabul/ai-switch/v2/internal/model"
 	"github.com/zuhabul/ai-switch/v2/internal/service"
@@ -146,5 +147,64 @@ func TestIncidentsEndpoint(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for list, got %d", resp2.StatusCode)
+	}
+}
+
+func TestAccountsEndpoint(t *testing.T) {
+	ts, svc := newTestHTTPServer(t)
+	defer ts.Close()
+
+	ctx := context.Background()
+	if err := svc.AddProfile(ctx, model.Profile{
+		ID:         "codex-main",
+		Provider:   "openai",
+		Frontend:   "codex",
+		AuthMethod: "chatgpt",
+		Protocol:   "app_server",
+		Account:    "team-a",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("add profile failed: %v", err)
+	}
+
+	body, _ := json.Marshal(model.AccountRecord{
+		Provider:               "openai",
+		Account:                "team-a",
+		Status:                 "healthy",
+		Tier:                   "chatgpt-pro",
+		AuthMethod:             "chatgpt",
+		AuthExpiresAt:          time.Now().UTC().Add(24 * time.Hour),
+		DailyLimitUSD:          50,
+		DailyUsedUSD:           12,
+		RateLimitRemaining5Min: 80,
+		RateLimitRemainingHour: 800,
+		Enabled:                true,
+	})
+	resp, err := http.Post(ts.URL+"/v2/accounts", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("accounts post failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 for account create, got %d", resp.StatusCode)
+	}
+
+	resp2, err := http.Get(ts.URL + "/v2/accounts?provider=openai")
+	if err != nil {
+		t.Fatalf("accounts get failed: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for account list, got %d", resp2.StatusCode)
+	}
+	var items []model.DashboardAccount
+	if err := json.NewDecoder(resp2.Body).Decode(&items); err != nil {
+		t.Fatalf("decode accounts failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one account, got %d", len(items))
+	}
+	if items[0].ProfileCount != 1 || items[0].DailyRemainingUSD != 38 {
+		t.Fatalf("unexpected account payload: %+v", items[0])
 	}
 }

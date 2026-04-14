@@ -2,7 +2,10 @@ const $ = (id) => document.getElementById(id);
 let authToken = localStorage.getItem("aiswitch_api_token") || "";
 
 async function api(path, options = {}) {
-  const headers = { "content-type": "application/json", ...(options.headers || {}) };
+  const headers = { ...(options.headers || {}) };
+  if (!("content-type" in headers)) {
+    headers["content-type"] = "application/json";
+  }
   if (authToken) {
     headers.Authorization = `Bearer ${authToken}`;
   }
@@ -11,9 +14,17 @@ async function api(path, options = {}) {
     ...options,
   });
   const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
+  }
   if (!res.ok) {
-    const msg = data?.error || `HTTP ${res.status}`;
+    const raw = typeof data?.raw === "string" ? data.raw.replace(/\s+/g, " ").trim() : "";
+    const msg = data?.error || raw.slice(0, 180) || `HTTP ${res.status}`;
     throw new Error(msg);
   }
   return data;

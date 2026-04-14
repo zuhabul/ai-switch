@@ -222,6 +222,7 @@ Local regression test:
 ./tests/managed_codex_rotation_matrix_test.sh
 ./tests/seamless_proxy_rotation_test.sh
 ./tests/status_ui_test.sh
+./tests/v2_deep_hardening_test.sh
 ```
 
 That test simulates:
@@ -299,6 +300,7 @@ Run full `v2` end-to-end tests from repo root:
 
 ```bash
 ./tests/v2_end_to_end_test.sh
+./tests/v2_deep_hardening_test.sh
 ```
 
 ### Example v2 workflow

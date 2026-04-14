@@ -13,6 +13,12 @@ PLATFORM_USE="${AI_SWITCH_PLATFORM_USE:-}"
 LEASE_TTL_MIN="${AI_SWITCH_LEASE_TTL_MIN:-15}"
 API_TOKEN="${AI_SWITCH_API_TOKEN:-${AISWITCHD_API_TOKEN:-}}"
 
+if [[ -z "${API_TOKEN}" ]] && [[ -r "/etc/default/aiswitchd" ]]; then
+  # Production fallback: load token from systemd environment file when
+  # caller runtime does not forward service env into wrapper subprocesses.
+  API_TOKEN="$(awk -F= '/^(AI_SWITCH_API_TOKEN|AISWITCHD_API_TOKEN)=/{print $2; exit}' /etc/default/aiswitchd 2>/dev/null || true)"
+fi
+
 if [[ -z "${FRONTEND}" ]]; then
   echo "AI_SWITCH_FRONTEND is required" >&2
   exit 2
